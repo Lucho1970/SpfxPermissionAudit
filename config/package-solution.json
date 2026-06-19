@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "permission-audit-client-side-solution",
+    "id": "a98861a8-f1bb-4070-8341-e51a816a557f",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.23.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "permission-audit description"
+      },
+      "longDescription": {
+        "default": "permission-audit description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "permission-audit Feature",
+        "description": "The feature that activates elements of the permission-audit solution.",
+        "id": "223fe607-23db-4237-8954-d85028fddc6b",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/permission-audit.sppkg"
+  }
+}

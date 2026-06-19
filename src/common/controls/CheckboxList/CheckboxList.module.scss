@@ -1,0 +1,18 @@
+.checkboxList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 600;
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

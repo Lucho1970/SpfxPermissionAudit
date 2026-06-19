@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "permission-audit-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/permissionAudit/PermissionAuditWebPart.js",
+          "manifest": "./src/webparts/permissionAudit/PermissionAuditWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "PermissionAuditWebPartStrings": "lib/webparts/permissionAudit/loc/{locale}.js"
+  }
+}
