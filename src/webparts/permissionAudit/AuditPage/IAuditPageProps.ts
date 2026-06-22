@@ -1,5 +1,7 @@
-import type { SPFI } from '@pnp/sp';
+import type { IGraphPermissionAuditService, ISharePointPermissionAuditService } from '../services';
 
 export interface IAuditPageProps {
-  sp: SPFI;
+  graphPermissionAuditService: IGraphPermissionAuditService;
+  groupedViewPreferenceKey: string;
+  sharePointPermissionAuditService: ISharePointPermissionAuditService;
 }

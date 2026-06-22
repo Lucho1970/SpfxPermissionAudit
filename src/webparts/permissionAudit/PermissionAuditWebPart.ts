@@ -7,12 +7,20 @@ import {
 } from '@microsoft/sp-property-pane';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
 import { IReadonlyTheme } from '@microsoft/sp-component-base';
+import { loadTheme } from '@fluentui/react/lib/Styling';
+import { MSGraphClientFactory } from '@microsoft/sp-http-msgraph';
 import { spfi, SPFI, SPFx } from '@pnp/sp';
 import '@pnp/sp/webs';
 
 import * as strings from 'PermissionAuditWebPartStrings';
 import PermissionAudit from './components/PermissionAudit';
 import { IPermissionAuditProps } from './components/IPermissionAuditProps';
+import {
+  GraphPermissionAuditService,
+  IGraphPermissionAuditService,
+  ISharePointPermissionAuditService,
+  SharePointPermissionAuditService
+} from './services';
 
 export interface IPermissionAuditWebPartProps {
   description: string;
@@ -23,6 +31,8 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
   private _isDarkTheme: boolean = false;
   private _environmentMessage: string = '';
   private _sp!: SPFI;
+  private _graphPermissionAuditService!: IGraphPermissionAuditService;
+  private _sharePointPermissionAuditService!: ISharePointPermissionAuditService;
 
   public render(): void {
     const element: React.ReactElement<IPermissionAuditProps> = React.createElement(
@@ -33,7 +43,9 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
         environmentMessage: this._environmentMessage,
         hasTeamsContext: !!this.context.sdks.microsoftTeams,
         userDisplayName: this.context.pageContext.user.displayName,
-        sp: this._sp
+        graphPermissionAuditService: this._graphPermissionAuditService,
+        groupedViewPreferenceKey: this._getGroupedViewPreferenceKey(),
+        sharePointPermissionAuditService: this._sharePointPermissionAuditService
       }
     );
 
@@ -42,6 +54,10 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
 
   protected onInit(): Promise<void> {
     this._sp = spfi().using(SPFx(this.context));
+    this._graphPermissionAuditService = new GraphPermissionAuditService(
+      this.context.serviceScope.consume(MSGraphClientFactory.serviceKey)
+    );
+    this._sharePointPermissionAuditService = new SharePointPermissionAuditService(this._sp, this._graphPermissionAuditService);
 
     return this._getEnvironmentMessage().then(message => {
       this._environmentMessage = message;
@@ -77,20 +93,42 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
     return Promise.resolve(this.context.isServedFromLocalhost ? strings.AppLocalEnvironmentSharePoint : strings.AppSharePointEnvironment);
   }
 
+  private _getGroupedViewPreferenceKey(): string {
+    const tenantId: string = this.context.pageContext.aadInfo?.tenantId?._guid || this.context.pageContext.site.absoluteUrl;
+    const userLoginName: string = this.context.pageContext.user.loginName || this.context.pageContext.user.email || 'current-user';
+
+    return `PermissionAudit:${tenantId}:${userLoginName}:GroupedView`;
+  }
+
   protected onThemeChanged(currentTheme: IReadonlyTheme | undefined): void {
     if (!currentTheme) {
       return;
     }
 
     this._isDarkTheme = !!currentTheme.isInverted;
+    loadTheme(currentTheme);
+
     const {
+      palette,
       semanticColors
     } = currentTheme;
 
     if (semanticColors) {
       this.domElement.style.setProperty('--bodyText', semanticColors.bodyText || null);
+      this.domElement.style.setProperty('--bodySubtext', semanticColors.bodySubtext || null);
+      this.domElement.style.setProperty('--bodyBackground', semanticColors.bodyBackground || null);
+      this.domElement.style.setProperty('--bodyStandoutBackground', semanticColors.bodyStandoutBackground || null);
+      this.domElement.style.setProperty('--bodyDivider', semanticColors.bodyDivider || null);
+      this.domElement.style.setProperty('--inputBorder', semanticColors.inputBorder || null);
       this.domElement.style.setProperty('--link', semanticColors.link || null);
       this.domElement.style.setProperty('--linkHovered', semanticColors.linkHovered || null);
+    }
+
+    if (palette) {
+      this.domElement.style.setProperty('--themePrimary', palette.themePrimary || null);
+      this.domElement.style.setProperty('--neutralLight', palette.neutralLight || null);
+      this.domElement.style.setProperty('--neutralLighter', palette.neutralLighter || null);
+      this.domElement.style.setProperty('--neutralQuaternaryAlt', palette.neutralQuaternaryAlt || null);
     }
 
   }

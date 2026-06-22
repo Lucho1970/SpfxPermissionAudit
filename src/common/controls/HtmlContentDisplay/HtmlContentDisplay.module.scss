@@ -1,0 +1,13 @@
+.htmlContentDisplay {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid "[theme:bodyDivider, default: #edebe9]";
+  border-color: var(--bodyDivider);
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
+  background-color: "[theme:bodyBackground, default: #ffffff]";
+  background-color: var(--bodyBackground);
+}

@@ -2,6 +2,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
 }
 
 .label {

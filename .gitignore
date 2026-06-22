@@ -19,6 +19,9 @@ temp
 *.sppkg
 .heft
 
+# Generated audit exports
+assets/*.csv
+
 # Coverage directory used by tools like istanbul
 coverage
 

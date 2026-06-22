@@ -1,77 +1,71 @@
-# permission-audit
+# Permission Audit
 
-## Summary
+SPFx web part for auditing SharePoint site, list/library, and list item permissions. It can expand SharePoint groups and Entra directory groups, show results in grouped or flat views, search loaded results by user/group, show detail HTML for selected rows, and export a flattened CSV.
 
-Short summary on functionality and used technologies.
+## Project Stack
 
-[picture of the solution in action, if possible]
+- SharePoint Framework 1.23
+- React 17
+- Fluent UI React v8
+- PnPjs v4 for SharePoint calls
+- Microsoft Graph client for directory group expansion
+- Heft build pipeline
 
-## Used SharePoint Framework Version
+## Setup
 
-![version](https://img.shields.io/badge/version-1.23.0-green.svg)
+Use Node.js 22.x, matching the `package.json` engine range.
 
-## Applies to
+```powershell
+npm install
+```
 
-- [SharePoint Framework](https://aka.ms/spfx)
-- [Microsoft 365 tenant](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
+## Common Commands
 
-> Get your own free development tenant by subscribing to [Microsoft 365 developer program](http://aka.ms/o365devprogram)
+```powershell
+npm run start
+npm run build
+npm run clean
+```
 
-## Prerequisites
+`npm run build` runs the production Heft test/build flow and packages the SPFx solution.
 
-> Any special pre-requisites?
+## Current Features
 
-## Solution
+- Audit current site permissions.
+- Optional group expansion for SharePoint groups and Entra-backed groups.
+- Handles Entra group claim suffixes such as `_m` and `_o`.
+- Optional list/library scan for unique permissions.
+- Optional list item scan for unique permissions, independent of list-level unique permissions.
+- Optional hidden-list inclusion.
+- Progressive UI updates while list/item scans complete.
+- Grouped/flat DetailsList toggle with tenant-and-user scoped local storage preference.
+- Details panel for selected site/list/item/principal rows.
+- User/group access search over the loaded audit result.
+- CSV export of all loaded audit data in flattened format.
 
-| Solution    | Author(s)                                               |
-| ----------- | ------------------------------------------------------- |
-| folder name | Author details (name, company, twitter alias with link) |
+## Important Code Areas
 
-## Version history
+- Web part entry point: `src/webparts/permissionAudit/PermissionAuditWebPart.ts`
+- Main UI: `src/webparts/permissionAudit/AuditPage/AuditPage.tsx`
+- Models: `src/webparts/permissionAudit/models/IPermissionAuditItem.ts`
+- SharePoint service: `src/webparts/permissionAudit/services/SharePointPermissionAuditService.ts`
+- Graph service: `src/webparts/permissionAudit/services/GraphPermissionAuditService.ts`
+- Common controls: `src/common/controls`
+- Localized strings: `src/webparts/permissionAudit/loc`
 
-| Version | Date             | Comments        |
-| ------- | ---------------- | --------------- |
-| 1.1     | March 10, 2021   | Update comment  |
-| 1.0     | January 29, 2021 | Initial release |
+## Localization Rule
 
-## Disclaimer
+All user-facing text should go through the SPFx `mystrings` localization pattern:
 
-**THIS CODE IS PROVIDED _AS IS_ WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.**
+- Add typings to `src/webparts/permissionAudit/loc/mystrings.d.ts`
+- Add English values to `src/webparts/permissionAudit/loc/en-us.js`
+- Import as `PermissionAuditWebPartStrings`
 
----
+## Notes For Future Work
 
-## Minimal Path to Awesome
-
-- Clone this repository
-- Ensure that you are at the solution folder
-- in the command-line run:
-  - `npm install -g @rushstack/heft`
-  - `npm install`
-  - `heft start`
-
-> Include any additional steps as needed.
-
-Other build commands can be listed using `heft --help`.
-
-## Features
-
-Description of the extension that expands upon high-level summary above.
-
-This extension illustrates the following concepts:
-
-- topic 1
-- topic 2
-- topic 3
-
-> Notice that better pictures and documentation will increase the sample usage and the value you are providing for others. Thanks for your submissions advance.
-
-> Share your web part with others through Microsoft 365 Patterns and Practices program to get visibility and exposure. More details on the community, open-source projects and other activities from http://aka.ms/m365pnp.
-
-## References
-
-- [Getting started with SharePoint Framework](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
-- [Building for Microsoft teams](https://docs.microsoft.com/sharepoint/dev/spfx/build-for-teams-overview)
-- [Use Microsoft Graph in your solution](https://docs.microsoft.com/sharepoint/dev/spfx/web-parts/get-started/using-microsoft-graph-apis)
-- [Publish SharePoint Framework applications to the Marketplace](https://docs.microsoft.com/sharepoint/dev/spfx/publish-to-marketplace-overview)
-- [Microsoft 365 Patterns and Practices](https://aka.ms/m365pnp) - Guidance, tooling, samples and open-source controls for your Microsoft 365 development
-- [Heft Documentation](https://heft.rushstack.io/)
+- Search currently runs against the already-loaded audit tree. To search group memberships, run the audit with `Expand groups` selected. To search list/item unique permissions, run with the relevant list or item audit options selected.
+- CSV exports are generated user output and should not be committed.
+- The details display accepts sanitized HTML produced by the web part code.
+- SharePoint calls should remain centralized in `SharePointPermissionAuditService`.
+- Graph calls should remain centralized in `GraphPermissionAuditService`.
+- Keep reusable controls under `src/common/controls`, one control per folder.

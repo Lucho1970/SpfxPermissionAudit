@@ -3,6 +3,8 @@
 .auditPage {
   color: "[theme:bodyText, default: #323130]";
   color: var(--bodyText);
+  background-color: "[theme:bodyBackground, default: #ffffff]";
+  background-color: var(--bodyBackground);
 }
 
 .header {
@@ -18,12 +20,36 @@
 .subtitle {
   margin: 0;
   color: "[theme:neutralSecondary, default: #605e5c]";
+  color: var(--bodySubtext);
 }
 
 .commandBar {
   margin: 20px 0;
 }
 
+.gridOptions {
+  margin-bottom: 8px;
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
+}
+
+.searchBar {
+  margin-bottom: 8px;
+
+  :global(.ms-SearchBox) {
+    width: 320px;
+    max-width: 100%;
+  }
+}
+
 .grid {
-  border-top: 1px solid $ms-color-neutralLight;
+  position: relative;
+  border-top: 1px solid "[theme:bodyDivider, default: #edebe9]";
+  border-top-color: var(--bodyDivider);
+  background-color: "[theme:bodyBackground, default: #ffffff]";
+  background-color: var(--bodyBackground);
+}
+
+.detailsContent {
+  margin-top: 12px;
 }

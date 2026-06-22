@@ -7,7 +7,11 @@ export default class PermissionAudit extends React.Component<IPermissionAuditPro
   public render(): React.ReactElement<IPermissionAuditProps> {
     return (
       <section className={`${styles.permissionAudit} ${this.props.hasTeamsContext ? styles.teams : ''}`}>
-        <AuditPage sp={this.props.sp} />
+        <AuditPage
+          graphPermissionAuditService={this.props.graphPermissionAuditService}
+          groupedViewPreferenceKey={this.props.groupedViewPreferenceKey}
+          sharePointPermissionAuditService={this.props.sharePointPermissionAuditService}
+        />
       </section>
     );
   }

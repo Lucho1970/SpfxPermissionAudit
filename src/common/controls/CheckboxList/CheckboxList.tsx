@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Checkbox } from '@fluentui/react/lib/Checkbox';
 import styles from './CheckboxList.module.scss';
-import type { ICheckboxListProps } from './ICheckboxListProps';
+import type { ICheckboxListProps } from '.';
 
 export const CheckboxList: React.FunctionComponent<ICheckboxListProps> = (props) => {
   const {
@@ -35,7 +35,7 @@ export const CheckboxList: React.FunctionComponent<ICheckboxListProps> = (props)
             key={option.key}
             label={option.label}
             checked={selectedKeySet.has(option.key)}
-            disabled={disabled}
+            disabled={disabled || option.disabled}
             onChange={(_event, checked) => onCheckboxChange(option.key, checked)}
           />
         ))}

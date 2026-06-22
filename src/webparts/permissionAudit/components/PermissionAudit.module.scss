@@ -5,6 +5,8 @@
   padding: 1em;
   color: "[theme:bodyText, default: #323130]";
   color: var(--bodyText);
+  background-color: "[theme:bodyBackground, default: #ffffff]";
+  background-color: var(--bodyBackground);
 
   &.teams {
     font-family: $ms-font-family-fallbacks;

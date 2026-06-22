@@ -1,4 +1,4 @@
-import type { SPFI } from '@pnp/sp';
+import type { IGraphPermissionAuditService, ISharePointPermissionAuditService } from '../services';
 
 export interface IPermissionAuditProps {
   description: string;
@@ -6,5 +6,7 @@ export interface IPermissionAuditProps {
   environmentMessage: string;
   hasTeamsContext: boolean;
   userDisplayName: string;
-  sp: SPFI;
+  graphPermissionAuditService: IGraphPermissionAuditService;
+  groupedViewPreferenceKey: string;
+  sharePointPermissionAuditService: ISharePointPermissionAuditService;
 }
