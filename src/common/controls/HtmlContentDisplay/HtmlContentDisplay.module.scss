@@ -10,4 +10,121 @@
   color: var(--bodyText);
   background-color: "[theme:bodyBackground, default: #ffffff]";
   background-color: var(--bodyBackground);
+
+  :global(.audit-detail-card) {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  :global(.audit-detail-header) {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--bodyDivider);
+  }
+
+  :global(.audit-detail-eyebrow) {
+    margin: 0 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bodySubtext);
+  }
+
+  :global(.audit-detail-header h3) {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.2;
+  }
+
+  :global(.audit-detail-path) {
+    margin: 6px 0 0;
+    color: var(--bodySubtext);
+    word-break: break-word;
+  }
+
+  :global(.audit-detail-tags) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  :global(.audit-detail-tag) {
+    padding: 4px 10px;
+    border: 1px solid var(--bodyDivider);
+    border-radius: 999px;
+    background: var(--bodyStandoutBackground);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  :global(.audit-detail-section) {
+    padding: 12px;
+    border: 1px solid var(--bodyDivider);
+    background: var(--bodyStandoutBackground);
+  }
+
+  :global(.audit-detail-section h4) {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  :global(.audit-detail-section dl) {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+  }
+
+  :global(.audit-detail-row) {
+    min-width: 0;
+  }
+
+  :global(.audit-detail-row dt) {
+    margin: 0 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bodySubtext);
+  }
+
+  :global(.audit-detail-row dd) {
+    margin: 0;
+    word-break: break-word;
+  }
+
+  :global(.audit-detail-section table) {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  :global(.audit-detail-section th),
+  :global(.audit-detail-section td) {
+    padding: 8px;
+    border-top: 1px solid var(--bodyDivider);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  :global(.audit-detail-section th) {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bodySubtext);
+  }
+
+  @media (max-width: 640px) {
+    :global(.audit-detail-header) {
+      flex-direction: column;
+    }
+
+    :global(.audit-detail-tags) {
+      justify-content: flex-start;
+    }
+  }
 }

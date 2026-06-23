@@ -90,6 +90,29 @@ declare interface IPermissionAuditWebPartStrings {
   AuditGroupDetailsMembersOnlyLabel: string;
   AuditGroupDetailsRequestsLabel: string;
   AuditGroupDetailsRequestEmailLabel: string;
+  AuditDetailsEmptyValue: string;
+  AuditDetailsOverviewSection: string;
+  AuditDetailsAccessSection: string;
+  AuditDetailsIdentitySection: string;
+  AuditDetailsMembershipSection: string;
+  AuditDetailsObjectSection: string;
+  AuditDetailsDirectorySection: string;
+  AuditDetailsAdditionalSection: string;
+  AuditDetailsPathValueSeparator: string;
+  AuditDetailsTagsLabel: string;
+  AuditDetailsInheritedFromLabel: string;
+  AuditDetailsSourceTypeLabel: string;
+  AuditDetailsDepthLabel: string;
+  AuditDetailsParentKeyLabel: string;
+  AuditDetailsDirectChildrenLabel: string;
+  AuditDetailsObjectTypeSite: string;
+  AuditDetailsObjectTypeList: string;
+  AuditDetailsObjectTypeListItem: string;
+  AuditDetailsObjectTypeSharePointGroup: string;
+  AuditDetailsObjectTypeDirectoryGroup: string;
+  AuditDetailsObjectTypeUser: string;
+  AuditDetailsObjectTypePrincipal: string;
+  AuditSplitResizeHandleAriaLabel: string;
   AuditGroupFetchError: string;
 }
 

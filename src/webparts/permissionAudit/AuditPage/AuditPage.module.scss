@@ -36,20 +36,68 @@
 .searchBar {
   margin-bottom: 8px;
 
-  :global(.ms-SearchBox) {
+  :global(.ms-BasePicker),
+  :global(.ms-BasePicker-text) {
     width: 320px;
     max-width: 100%;
   }
 }
 
+.splitPane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gridPane,
+.detailsPane {
+  min-height: 0;
+}
+
 .grid {
   position: relative;
+  height: 100%;
   border-top: 1px solid "[theme:bodyDivider, default: #edebe9]";
   border-top-color: var(--bodyDivider);
   background-color: "[theme:bodyBackground, default: #ffffff]";
   background-color: var(--bodyBackground);
 }
 
+.resizeHandle {
+  position: relative;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid "[theme:bodyDivider, default: #edebe9]";
+  border-bottom: 1px solid "[theme:bodyDivider, default: #edebe9]";
+  border-top-color: var(--bodyDivider);
+  border-bottom-color: var(--bodyDivider);
+  background-color: "[theme:bodyBackground, default: #ffffff]";
+  background-color: var(--bodyBackground);
+  cursor: row-resize;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 56px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: "[theme:neutralTertiary, default: #a19f9d]";
+    background-color: var(--bodySubtext);
+    transform: translate(-50%, -50%);
+    opacity: 0.75;
+  }
+
+  &:hover,
+  &:focus-visible {
+    background-color: "[theme:bodyStandoutBackground, default: #f3f2f1]";
+    background-color: var(--bodyStandoutBackground);
+    outline: none;
+  }
+}
+
 .detailsContent {
-  margin-top: 12px;
+  height: 100%;
 }

@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { ConstrainMode, DetailsList, DetailsListLayoutMode, IColumn, IDetailsHeaderProps, SelectionMode } from '@fluentui/react/lib/DetailsList';
-import { DefaultButton, PrimaryButton } from '@fluentui/react/lib/Button';
+import { DefaultButton } from '@fluentui/react/lib/Button';
 import { IGroup, IGroupHeaderProps } from '@fluentui/react/lib/GroupedList';
+import { NormalPeoplePicker } from '@fluentui/react/lib/Pickers';
+import type { IPersonaProps } from '@fluentui/react/lib/Persona';
 import { ScrollablePane, ScrollbarVisibility } from '@fluentui/react/lib/ScrollablePane';
-import { SearchBox } from '@fluentui/react/lib/SearchBox';
 import { Selection } from '@fluentui/react/lib/Selection';
 import { Spinner, SpinnerSize } from '@fluentui/react/lib/Spinner';
 import { Stack } from '@fluentui/react/lib/Stack';
@@ -13,7 +14,13 @@ import { CheckboxList, ICheckboxListOption } from '../../../common/controls/Chec
 import { HtmlContentDisplay } from '../../../common/controls/HtmlContentDisplay';
 import type { IAuditPageProps } from './IAuditPageProps';
 import type { IPermissionAuditItem, IPermissionAuditLevel } from '../models';
-import type { IAssociatedSharePointGroupIds, ICurrentSitePermissionGroupsResult, ISharePointPermissionAuditOptions } from '../services';
+import type {
+  IAssociatedSharePointGroupIds,
+  ICurrentSitePermissionGroupsResult,
+  IPrincipalAccessSearchResult,
+  ISharePointPermissionAuditOptions
+} from '../services';
+import type { IDirectoryPersonInfo } from '../services';
 import styles from './AuditPage.module.scss';
 import * as strings from 'PermissionAuditWebPartStrings';
 
@@ -40,9 +47,8 @@ interface IAuditGroupData {
   permissionItem: IPermissionAuditItem;
 }
 
-interface IPrincipalAccessMatch {
-  matchItem: IPermissionAuditItem;
-  scopeItem: IPermissionAuditItem;
+interface IPrincipalSuggestionPersona extends IPersonaProps {
+  directoryPerson: IDirectoryPersonInfo;
 }
 
 const auditOptions: ICheckboxListOption[] = [
@@ -110,9 +116,13 @@ const auditColumns: IColumn[] = [
   }
 ];
 
-const auditDetailsContentHeight: number = 180;
-const auditResultsGridHeight: number = 420;
 const groupedViewStorageValue: string = 'true';
+const auditAutoRunDebounceMs: number = 400;
+const auditSplitPaneHeight: number = 612;
+const auditResizeHandleHeight: number = 12;
+const auditDefaultGridHeight: number = 420;
+const auditMinimumGridHeight: number = 220;
+const auditMinimumDetailsHeight: number = 140;
 
 const toDisplayText = (value: unknown): string => `${value ?? ''}`;
 
@@ -136,6 +146,17 @@ const formatPermissionLevels = (permissionLevels: IPermissionAuditLevel[]): stri
 };
 
 const toYesNo = (value: boolean): string => value ? strings.AuditGroupYes : strings.AuditGroupNo;
+
+const toDetailValue = (value: unknown): string => {
+  const text: string = toDisplayText(value).trim();
+
+  return text || strings.AuditDetailsEmptyValue;
+};
+
+const joinPath = (path: string[]): string => path.join(strings.AuditDetailsPathValueSeparator);
+
+const clamp = (value: number, minValue: number, maxValue: number): number =>
+  Math.min(Math.max(value, minValue), maxValue);
 
 const getGroupType = (
   permissionItem: IPermissionAuditItem,
@@ -191,122 +212,189 @@ const getGroupPath = (permissionItem: IPermissionAuditItem): string => {
   return permissionItem.path.slice(0, -1).join(' > ');
 };
 
-const isSecurableObject = (permissionItem: IPermissionAuditItem): boolean =>
-  permissionItem.principalType === 'Site' || permissionItem.principalType === 'List' || permissionItem.principalType === 'ListItem';
-
-const isSearchablePrincipal = (permissionItem: IPermissionAuditItem): boolean =>
-  !isSecurableObject(permissionItem);
-
-const principalMatchesSearch = (permissionItem: IPermissionAuditItem, normalizedSearchText: string): boolean => {
-  const searchableValues: string[] = [
-    permissionItem.displayName,
-    permissionItem.loginName,
-    permissionItem.personDetails?.email,
-    permissionItem.personDetails?.userPrincipalName,
-    permissionItem.groupDetails?.aadObjectId
-  ].map((value) => toDisplayText(value).toLowerCase());
-
-  return searchableValues.some((value) => value.indexOf(normalizedSearchText) > -1);
-};
-
-const findNearestScope = (permissionItem: IPermissionAuditItem, ancestors: IPermissionAuditItem[]): IPermissionAuditItem =>
-  isSecurableObject(permissionItem)
-    ? permissionItem
-    : ancestors.slice().reverse().find((ancestor) => isSecurableObject(ancestor)) || permissionItem;
-
-const findPrincipalAccessMatches = (
-  permissionItems: IPermissionAuditItem[],
-  searchText: string,
-  ancestors: IPermissionAuditItem[] = []
-): IPrincipalAccessMatch[] => {
-  const normalizedSearchText: string = searchText.trim().toLowerCase();
-
-  if (!normalizedSearchText) {
-    return [];
-  }
-
-  return permissionItems.reduce((matches: IPrincipalAccessMatch[], permissionItem) => {
-    if (isSearchablePrincipal(permissionItem) && principalMatchesSearch(permissionItem, normalizedSearchText)) {
-      matches.push({
-        matchItem: permissionItem,
-        scopeItem: findNearestScope(permissionItem, ancestors)
-      });
-    }
-
-    if (permissionItem.children?.length) {
-      matches.push(...findPrincipalAccessMatches(permissionItem.children, searchText, [...ancestors, permissionItem]));
-    }
-
-    return matches;
-  }, []);
-};
-
 const buildDetailsHtml = (
   permissionItem: IPermissionAuditItem,
   permissionLevels: string,
   associatedGroupIds: IAssociatedSharePointGroupIds
 ): string => {
   const groupDetails = permissionItem.groupDetails;
-  const membershipDetails: string[] = [
-    `${strings.AuditGroupDetailsMembersCanEditLabel}: ${toYesNo(!!groupDetails?.allowMembersEditMembership)}`,
-    `${strings.AuditGroupDetailsMembersOnlyLabel}: ${toYesNo(!!groupDetails?.onlyAllowMembersViewMembership)}`,
-    `${strings.AuditGroupDetailsRequestsLabel}: ${toYesNo(!!groupDetails?.allowRequestToJoinLeave)}`,
-    `${strings.AuditGroupDetailsRequestEmailLabel}: ${toDisplayText(groupDetails?.requestToJoinLeaveEmail)}`
+  const objectDetails = permissionItem.objectDetails;
+  const personDetails = permissionItem.personDetails;
+  const tags: string[] = [
+    getPrincipalTypeLabel(permissionItem, associatedGroupIds),
+    permissionItem.sourceType
   ];
 
-  return `
-    <h3>${encodeHtml(strings.AuditGroupDetailsHeading)}</h3>
-    <dl>
-      <dt>${encodeHtml(strings.AuditResultsPrincipalTypeColumn)}</dt>
-      <dd>${encodeHtml(getPrincipalTypeLabel(permissionItem, associatedGroupIds))}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsPathLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.path.join(' > '))}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsIdLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.principalId)}</dd>
-      <dt>${encodeHtml(strings.AuditResultsGroupNameColumn)}</dt>
-      <dd>${encodeHtml(permissionItem.displayName)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsExpansionErrorLabel)}</dt>
-      <dd>${encodeHtml(groupDetails?.expansionError)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsLoginNameLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.loginName)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsDescriptionLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.description)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsOwnerLabel)}</dt>
-      <dd>${encodeHtml(groupDetails?.ownerTitle)}</dd>
-      <dt>${encodeHtml(strings.AuditObjectDetailsUrlLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.objectDetails?.url || permissionItem.objectDetails?.serverRelativeUrl)}</dd>
-      <dt>${encodeHtml(strings.AuditObjectDetailsItemCountLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.objectDetails?.itemCount)}</dd>
-      <dt>${encodeHtml(strings.AuditObjectDetailsItemIdLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.objectDetails?.itemId)}</dd>
-      <dt>${encodeHtml(strings.AuditResultsHiddenInUiColumn)}</dt>
-      <dd>${encodeHtml(permissionItem.objectDetails?.hidden === undefined ? '' : toYesNo(permissionItem.objectDetails.hidden))}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsEmailLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.personDetails?.email)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsUserPrincipalNameLabel)}</dt>
-      <dd>${encodeHtml(permissionItem.personDetails?.userPrincipalName)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsPermissionsLabel)}</dt>
-      <dd>${encodeHtml(permissionLevels)}</dd>
-      <dt>${encodeHtml(strings.AuditGroupDetailsMembershipLabel)}</dt>
-      <dd>${encodeHtml(membershipDetails.join(' | '))}</dd>
-    </dl>
+  if (permissionLevels !== strings.AuditGroupNoDirectPermissions) {
+    tags.push(permissionLevels);
+  }
+
+  const renderDetailRow = (label: string, value: unknown): string => `
+    <div class="audit-detail-row">
+      <dt>${encodeHtml(label)}</dt>
+      <dd>${encodeHtml(toDetailValue(value))}</dd>
+    </div>
   `;
+
+  const renderDetailSection = (title: string, rows: string[]): string => `
+    <section class="audit-detail-section">
+      <h4>${encodeHtml(title)}</h4>
+      <dl>${rows.join('')}</dl>
+    </section>
+  `;
+
+  const renderTagList = (tagValues: string[]): string => `
+    <div class="audit-detail-tags" aria-label="${encodeHtml(strings.AuditDetailsTagsLabel)}">
+      ${tagValues.map((tagValue) => `<span class="audit-detail-tag">${encodeHtml(tagValue)}</span>`).join('')}
+    </div>
+  `;
+
+  const renderAdditionalDetails = (): string => {
+    if (!permissionItem.details?.length) {
+      return '';
+    }
+
+    return renderDetailSection(
+      strings.AuditDetailsAdditionalSection,
+      permissionItem.details.map((detail) => renderDetailRow(detail.label, detail.value))
+    );
+  };
+
+  const renderPrincipalTemplate = (objectTypeLabel: string, extraSections: string[]): string => `
+    <div class="audit-detail-card">
+      <header class="audit-detail-header">
+        <div>
+          <p class="audit-detail-eyebrow">${encodeHtml(objectTypeLabel)}</p>
+          <h3>${encodeHtml(permissionItem.displayName)}</h3>
+          <p class="audit-detail-path">${encodeHtml(joinPath(permissionItem.path))}</p>
+        </div>
+        ${renderTagList(tags)}
+      </header>
+      ${renderDetailSection(strings.AuditDetailsOverviewSection, [
+        renderDetailRow(strings.AuditResultsDisplayNameColumn, permissionItem.displayName),
+        renderDetailRow(strings.AuditResultsPrincipalTypeColumn, getPrincipalTypeLabel(permissionItem, associatedGroupIds)),
+        renderDetailRow(strings.AuditDetailsSourceTypeLabel, permissionItem.sourceType),
+        renderDetailRow(strings.AuditGroupDetailsPathLabel, joinPath(permissionItem.path)),
+        renderDetailRow(strings.AuditDetailsInheritedFromLabel, permissionItem.path.length > 1 ? permissionItem.path.slice(0, -1).join(strings.AuditDetailsPathValueSeparator) : ''),
+        renderDetailRow(strings.AuditDetailsDepthLabel, permissionItem.depth),
+        renderDetailRow(strings.AuditDetailsParentKeyLabel, permissionItem.parentKey),
+        renderDetailRow(strings.AuditDetailsDirectChildrenLabel, permissionItem.children?.length || 0)
+      ])}
+      ${renderDetailSection(strings.AuditDetailsAccessSection, [
+        renderDetailRow(strings.AuditGroupDetailsPermissionsLabel, permissionLevels),
+        renderDetailRow(strings.AuditGroupDetailsExpansionErrorLabel, groupDetails?.expansionError)
+      ])}
+      ${extraSections.join('')}
+      ${renderAdditionalDetails()}
+    </div>
+  `;
+
+  switch (permissionItem.principalType) {
+    case 'Site':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeSite, [
+        renderDetailSection(strings.AuditDetailsObjectSection, [
+          renderDetailRow(strings.AuditGroupDetailsDescriptionLabel, permissionItem.description),
+          renderDetailRow(strings.AuditObjectDetailsUrlLabel, objectDetails?.url || objectDetails?.serverRelativeUrl),
+          renderDetailRow(strings.AuditDetailsDirectChildrenLabel, permissionItem.children?.length || 0)
+        ])
+      ]);
+    case 'List':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeList, [
+        renderDetailSection(strings.AuditDetailsObjectSection, [
+          renderDetailRow(strings.AuditGroupDetailsDescriptionLabel, permissionItem.description),
+          renderDetailRow(strings.AuditObjectDetailsUrlLabel, objectDetails?.serverRelativeUrl || objectDetails?.url),
+          renderDetailRow(strings.AuditExportBaseTemplateColumn, objectDetails?.baseTemplate),
+          renderDetailRow(strings.AuditObjectDetailsItemCountLabel, objectDetails?.itemCount),
+          renderDetailRow(strings.AuditResultsHiddenInUiColumn, objectDetails?.hidden === undefined ? '' : toYesNo(objectDetails.hidden))
+        ])
+      ]);
+    case 'ListItem':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeListItem, [
+        renderDetailSection(strings.AuditDetailsObjectSection, [
+          renderDetailRow(strings.AuditObjectDetailsItemIdLabel, objectDetails?.itemId),
+          renderDetailRow(strings.AuditObjectDetailsUrlLabel, objectDetails?.serverRelativeUrl || objectDetails?.url),
+          renderDetailRow(strings.AuditDetailsDirectChildrenLabel, permissionItem.children?.length || 0)
+        ])
+      ]);
+    case 'User':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeUser, [
+        renderDetailSection(strings.AuditDetailsIdentitySection, [
+          renderDetailRow(strings.AuditGroupDetailsIdLabel, permissionItem.principalId),
+          renderDetailRow(strings.AuditGroupDetailsLoginNameLabel, permissionItem.loginName),
+          renderDetailRow(strings.AuditGroupDetailsEmailLabel, personDetails?.email),
+          renderDetailRow(strings.AuditGroupDetailsUserPrincipalNameLabel, personDetails?.userPrincipalName),
+          renderDetailRow(strings.AuditExportJobTitleColumn, personDetails?.jobTitle),
+          renderDetailRow(strings.AuditExportDepartmentColumn, personDetails?.department)
+        ])
+      ]);
+    case 'SharePointGroup':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeSharePointGroup, [
+        renderDetailSection(strings.AuditDetailsIdentitySection, [
+          renderDetailRow(strings.AuditGroupDetailsIdLabel, permissionItem.principalId),
+          renderDetailRow(strings.AuditGroupDetailsLoginNameLabel, permissionItem.loginName),
+          renderDetailRow(strings.AuditGroupDetailsDescriptionLabel, permissionItem.description),
+          renderDetailRow(strings.AuditGroupDetailsOwnerLabel, groupDetails?.ownerTitle)
+        ]),
+        renderDetailSection(strings.AuditDetailsMembershipSection, [
+          renderDetailRow(strings.AuditResultsMembersCanEditColumn, groupDetails?.allowMembersEditMembership === undefined ? '' : toYesNo(groupDetails.allowMembersEditMembership)),
+          renderDetailRow(strings.AuditGroupDetailsMembersOnlyLabel, groupDetails?.onlyAllowMembersViewMembership === undefined ? '' : toYesNo(groupDetails.onlyAllowMembersViewMembership)),
+          renderDetailRow(strings.AuditGroupDetailsRequestsLabel, groupDetails?.allowRequestToJoinLeave === undefined ? '' : toYesNo(groupDetails.allowRequestToJoinLeave)),
+          renderDetailRow(strings.AuditGroupDetailsRequestEmailLabel, groupDetails?.requestToJoinLeaveEmail),
+          renderDetailRow(strings.AuditResultsHiddenInUiColumn, groupDetails?.isHiddenInUi === undefined ? '' : toYesNo(groupDetails.isHiddenInUi)),
+          renderDetailRow(strings.AuditDetailsDirectChildrenLabel, permissionItem.children?.length || 0)
+        ])
+      ]);
+    case 'SecurityGroup':
+    case 'DistributionList':
+    case 'Microsoft365Group':
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypeDirectoryGroup, [
+        renderDetailSection(strings.AuditDetailsDirectorySection, [
+          renderDetailRow(strings.AuditGroupDetailsIdLabel, permissionItem.principalId),
+          renderDetailRow(strings.AuditGroupDetailsLoginNameLabel, permissionItem.loginName),
+          renderDetailRow(strings.AuditExportAadObjectIdColumn, groupDetails?.aadObjectId),
+          renderDetailRow(strings.AuditResultsHiddenInUiColumn, groupDetails?.isHiddenInUi === undefined ? '' : toYesNo(groupDetails.isHiddenInUi)),
+          renderDetailRow(strings.AuditDetailsDirectChildrenLabel, permissionItem.children?.length || 0)
+        ])
+      ]);
+    default:
+      return renderPrincipalTemplate(strings.AuditDetailsObjectTypePrincipal, [
+        renderDetailSection(strings.AuditDetailsIdentitySection, [
+          renderDetailRow(strings.AuditGroupDetailsIdLabel, permissionItem.principalId),
+          renderDetailRow(strings.AuditGroupDetailsLoginNameLabel, permissionItem.loginName),
+          renderDetailRow(strings.AuditGroupDetailsDescriptionLabel, permissionItem.description),
+          renderDetailRow(strings.AuditExportAadObjectIdColumn, groupDetails?.aadObjectId)
+        ])
+      ]);
+  }
 };
 
 const buildPrincipalSearchDetailsHtml = (
-  auditResult: ICurrentSitePermissionGroupsResult,
-  searchText: string,
+  searchResult: IPrincipalAccessSearchResult,
   associatedGroupIds: IAssociatedSharePointGroupIds
 ): string => {
-  const matches: IPrincipalAccessMatch[] = findPrincipalAccessMatches(auditResult.groups, searchText);
+  const { principal, matches } = searchResult;
 
   if (matches.length === 0) {
     return `
-      <h3>${encodeHtml(strings.AuditPrincipalSearchResultsHeading)}</h3>
-      <p>${encodeHtml(strings.AuditPrincipalSearchNoResults)}</p>
+      <div class="audit-detail-card">
+        <header class="audit-detail-header">
+          <div>
+            <p class="audit-detail-eyebrow">${encodeHtml(strings.AuditPrincipalTypeUser)}</p>
+            <h3>${encodeHtml(principal.displayName)}</h3>
+            <p class="audit-detail-path">${encodeHtml(toDetailValue(principal.userPrincipalName || principal.email))}</p>
+          </div>
+        </header>
+        <section class="audit-detail-section">
+          <h4>${encodeHtml(strings.AuditPrincipalSearchResultsHeading)}</h4>
+          <p>${encodeHtml(strings.AuditPrincipalSearchNoResults)}</p>
+        </section>
+      </div>
     `;
   }
 
+  const uniqueScopeCount: number = matches.filter((match) =>
+    match.scopeItem.principalType === 'List' || match.scopeItem.principalType === 'ListItem'
+  ).length;
   const rows: string = matches.map((match) => {
     const matchTypeLabel: string = getPrincipalTypeLabel(match.matchItem, associatedGroupIds);
     const scopeTypeLabel: string = getPrincipalTypeLabel(match.scopeItem, associatedGroupIds);
@@ -317,25 +405,65 @@ const buildPrincipalSearchDetailsHtml = (
         <td>${encodeHtml(matchTypeLabel)}</td>
         <td>${encodeHtml(formatPermissionLevels(match.matchItem.permissionLevels))}</td>
         <td>${encodeHtml(`${match.scopeItem.displayName} (${scopeTypeLabel})`)}</td>
-        <td>${encodeHtml(match.matchItem.path.join(' > '))}</td>
+        <td>${encodeHtml(joinPath(match.matchItem.path))}</td>
       </tr>
     `;
   }).join('');
 
   return `
-    <h3>${encodeHtml(strings.AuditPrincipalSearchResultsHeading)}</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>${encodeHtml(strings.AuditResultsDisplayNameColumn)}</th>
-          <th>${encodeHtml(strings.AuditResultsPrincipalTypeColumn)}</th>
-          <th>${encodeHtml(strings.AuditResultsPermissionLevelsColumn)}</th>
-          <th>${encodeHtml(strings.AuditPrincipalSearchScopeColumn)}</th>
-          <th>${encodeHtml(strings.AuditPrincipalSearchAccessViaColumn)}</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="audit-detail-card">
+      <header class="audit-detail-header">
+        <div>
+          <p class="audit-detail-eyebrow">${encodeHtml(strings.AuditPrincipalTypeUser)}</p>
+          <h3>${encodeHtml(principal.displayName)}</h3>
+          <p class="audit-detail-path">${encodeHtml(toDetailValue(principal.userPrincipalName || principal.email))}</p>
+        </div>
+        <div class="audit-detail-tags" aria-label="${encodeHtml(strings.AuditDetailsTagsLabel)}">
+          <span class="audit-detail-tag">${encodeHtml(`${matches.length} ${strings.AuditPrincipalSearchResultsHeading}`)}</span>
+          <span class="audit-detail-tag">${encodeHtml(`${uniqueScopeCount} ${strings.AuditPrincipalSearchScopeColumn}`)}</span>
+        </div>
+      </header>
+      <section class="audit-detail-section">
+        <h4>${encodeHtml(strings.AuditDetailsIdentitySection)}</h4>
+        <dl>
+          <div class="audit-detail-row">
+            <dt>${encodeHtml(strings.AuditResultsDisplayNameColumn)}</dt>
+            <dd>${encodeHtml(toDetailValue(principal.displayName))}</dd>
+          </div>
+          <div class="audit-detail-row">
+            <dt>${encodeHtml(strings.AuditGroupDetailsEmailLabel)}</dt>
+            <dd>${encodeHtml(toDetailValue(principal.email))}</dd>
+          </div>
+          <div class="audit-detail-row">
+            <dt>${encodeHtml(strings.AuditGroupDetailsUserPrincipalNameLabel)}</dt>
+            <dd>${encodeHtml(toDetailValue(principal.userPrincipalName))}</dd>
+          </div>
+          <div class="audit-detail-row">
+            <dt>${encodeHtml(strings.AuditExportDepartmentColumn)}</dt>
+            <dd>${encodeHtml(toDetailValue(principal.department))}</dd>
+          </div>
+          <div class="audit-detail-row">
+            <dt>${encodeHtml(strings.AuditExportJobTitleColumn)}</dt>
+            <dd>${encodeHtml(toDetailValue(principal.jobTitle))}</dd>
+          </div>
+        </dl>
+      </section>
+      <section class="audit-detail-section">
+        <h4>${encodeHtml(strings.AuditPrincipalSearchResultsHeading)}</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>${encodeHtml(strings.AuditResultsDisplayNameColumn)}</th>
+              <th>${encodeHtml(strings.AuditResultsPrincipalTypeColumn)}</th>
+              <th>${encodeHtml(strings.AuditResultsPermissionLevelsColumn)}</th>
+              <th>${encodeHtml(strings.AuditPrincipalSearchScopeColumn)}</th>
+              <th>${encodeHtml(strings.AuditPrincipalSearchAccessViaColumn)}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </section>
+    </div>
   `;
 };
 
@@ -482,6 +610,29 @@ const writeGroupedViewPreference = (preferenceKey: string, isGroupedView: boolea
   }
 };
 
+const readPanelHeightPreference = (preferenceKey: string): number => {
+  try {
+    const storedValue: string | null = window.localStorage.getItem(preferenceKey);
+    const parsedValue: number = storedValue ? Number(storedValue) : auditDefaultGridHeight;
+
+    return clamp(
+      Number.isFinite(parsedValue) ? parsedValue : auditDefaultGridHeight,
+      auditMinimumGridHeight,
+      auditSplitPaneHeight - auditResizeHandleHeight - auditMinimumDetailsHeight
+    );
+  } catch {
+    return auditDefaultGridHeight;
+  }
+};
+
+const writePanelHeightPreference = (preferenceKey: string, height: number): void => {
+  try {
+    window.localStorage.setItem(preferenceKey, `${height}`);
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+};
+
 const projectAuditResult = (
   auditResult: ICurrentSitePermissionGroupsResult,
   isGroupedView: boolean
@@ -593,20 +744,42 @@ const downloadCsv = (csvContent: string): void => {
   URL.revokeObjectURL(url);
 };
 
+const toPrincipalSuggestionPersona = (directoryPerson: IDirectoryPersonInfo): IPrincipalSuggestionPersona => ({
+  key: directoryPerson.id,
+  text: directoryPerson.displayName,
+  primaryText: directoryPerson.displayName,
+  secondaryText: directoryPerson.userPrincipalName || directoryPerson.email,
+  tertiaryText: directoryPerson.department,
+  optionalText: directoryPerson.jobTitle,
+  directoryPerson
+});
+
 export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
   const [selectedOptionKeys, setSelectedOptionKeys] = React.useState<string[]>([]);
   const [auditGroups, setAuditGroups] = React.useState<IGroup[] | undefined>(undefined);
   const [auditItems, setAuditItems] = React.useState<IAuditGridItem[]>([]);
   const [auditResult, setAuditResult] = React.useState<ICurrentSitePermissionGroupsResult | undefined>(undefined);
   const [selectedDetailsHtml, setSelectedDetailsHtml] = React.useState<string>('');
-  const [principalSearchText, setPrincipalSearchText] = React.useState<string>('');
-  const [isLoading, setIsLoading] = React.useState<boolean>(false);
+  const [selectedPrincipalSuggestions, setSelectedPrincipalSuggestions] = React.useState<IPrincipalSuggestionPersona[]>([]);
+  const [isAuditLoading, setIsAuditLoading] = React.useState<boolean>(false);
+  const [isPrincipalSearchLoading, setIsPrincipalSearchLoading] = React.useState<boolean>(false);
   const [isGroupedView, setIsGroupedView] = React.useState<boolean>(() => readGroupedViewPreference(props.groupedViewPreferenceKey));
+  const detailsPanelHeightPreferenceKey: string = React.useMemo(
+    () => `${props.groupedViewPreferenceKey}:GridHeight`,
+    [props.groupedViewPreferenceKey]
+  );
+  const [auditGridHeight, setAuditGridHeight] = React.useState<number>(() => readPanelHeightPreference(`${props.groupedViewPreferenceKey}:GridHeight`));
   const isSharePointReady: boolean = !!props.sharePointPermissionAuditService;
   const selectionRef = React.useRef<Selection>();
+  const latestAuditRequestIdRef = React.useRef<number>(0);
+  const latestPrincipalSearchRequestIdRef = React.useRef<number>(0);
+  const resizeStateRef = React.useRef<{ startY: number; startHeight: number } | undefined>(undefined);
   const includeListsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListsWithUniquePermissions') > -1;
   const includeListItemsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListItemsWithUniquePermissions') > -1;
   const includeListAuditScope: boolean = includeListsWithUniquePermissions || includeListItemsWithUniquePermissions;
+  const maximumGridHeight: number = auditSplitPaneHeight - auditResizeHandleHeight - auditMinimumDetailsHeight;
+  const auditDetailsContentHeight: number = auditSplitPaneHeight - auditResizeHandleHeight - auditGridHeight;
+  const isLoading: boolean = isAuditLoading || isPrincipalSearchLoading;
   const auditOptionsWithDependencies: ICheckboxListOption[] = React.useMemo(() => [
     auditOptions[0],
     auditOptions[1],
@@ -627,8 +800,20 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     });
   }
 
-  const onStartAudit = React.useCallback(async (): Promise<void> => {
-    setIsLoading(true);
+  const onStartAudit = React.useCallback(async (requestId: number): Promise<void> => {
+    const setAuditProjection = (nextAuditResult: ICurrentSitePermissionGroupsResult): void => {
+      if (latestAuditRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
+
+      setAuditResult(nextAuditResult);
+      setAuditGroups(projection.groups);
+      setAuditItems(projection.items);
+    };
+
+    setIsAuditLoading(true);
     setAuditResult(undefined);
     setAuditGroups(undefined);
     setAuditItems([]);
@@ -640,56 +825,63 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
       const shouldIncludeHiddenListsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1;
       const shouldIncludeListItemsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListItemsWithUniquePermissions') > -1;
 
-      const updateAuditResult = (auditResult: ICurrentSitePermissionGroupsResult): void => {
-        const projection: IAuditGridProjection = projectAuditResult(auditResult, isGroupedView);
-
-        setAuditResult(auditResult);
-        setAuditGroups(projection.groups);
-        setAuditItems(projection.items);
-      };
-
       if (shouldIncludeListsWithUniquePermissions || shouldIncludeListItemsWithUniquePermissions) {
         const auditOptions: ISharePointPermissionAuditOptions = {
           expandGroups: shouldExpandGroups,
           includeHiddenListsWithUniquePermissions: shouldIncludeHiddenListsWithUniquePermissions,
           includeListItemsWithUniquePermissions: shouldIncludeListItemsWithUniquePermissions,
           includeListsWithUniquePermissions: shouldIncludeListsWithUniquePermissions,
-          onAuditUpdated: updateAuditResult
+          onAuditUpdated: setAuditProjection
         };
         const auditResult: ICurrentSitePermissionGroupsResult =
           await props.sharePointPermissionAuditService.getPermissionAuditAsync(auditOptions);
 
-        updateAuditResult(auditResult);
+        setAuditProjection(auditResult);
       } else if (selectedOptionKeys.length === 0) {
         const siteGroupsResult: ICurrentSitePermissionGroupsResult =
           await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync();
-        const projection: IAuditGridProjection = projectAuditResult(siteGroupsResult, isGroupedView);
-
-        setAuditResult(siteGroupsResult);
-        setAuditGroups(projection.groups);
-        setAuditItems(projection.items);
+        setAuditProjection(siteGroupsResult);
       } else if (shouldExpandGroups) {
         const siteGroupsResult: ICurrentSitePermissionGroupsResult =
           await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(true);
-        const projection: IAuditGridProjection = projectAuditResult(siteGroupsResult, isGroupedView);
-
-        setAuditResult(siteGroupsResult);
-        setAuditGroups(projection.groups);
-        setAuditItems(projection.items);
+        setAuditProjection(siteGroupsResult);
       }
     } catch (error) {
-      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+      if (latestAuditRequestIdRef.current === requestId) {
+        setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+      }
     } finally {
-      setIsLoading(false);
+      if (latestAuditRequestIdRef.current === requestId) {
+        setIsAuditLoading(false);
+      }
     }
   }, [isGroupedView, props.sharePointPermissionAuditService, selectedOptionKeys]);
 
-  const onStartButtonClick = React.useCallback((): void => {
-    onStartAudit().catch((error) => {
-      setIsLoading(false);
-      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
-    });
-  }, [onStartAudit]);
+  React.useEffect(() => {
+    if (!isSharePointReady) {
+      return undefined;
+    }
+
+    const requestId: number = latestAuditRequestIdRef.current + 1;
+    latestAuditRequestIdRef.current = requestId;
+
+    const timeoutHandle: number = window.setTimeout(() => {
+      onStartAudit(requestId).catch((error) => {
+        if (latestAuditRequestIdRef.current === requestId) {
+          setIsAuditLoading(false);
+          setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+        }
+      });
+    }, auditAutoRunDebounceMs);
+
+    return () => {
+      window.clearTimeout(timeoutHandle);
+    };
+  }, [isSharePointReady, onStartAudit]);
+
+  React.useEffect(() => {
+    setAuditGridHeight(readPanelHeightPreference(detailsPanelHeightPreferenceKey));
+  }, [detailsPanelHeightPreferenceKey]);
 
   const onAuditOptionsChange = React.useCallback((nextSelectedOptionKeys: string[]): void => {
     if (
@@ -725,22 +917,72 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     downloadCsv(buildCsvContent(auditResult));
   }, [auditResult]);
 
-  const onPrincipalSearch = React.useCallback((): void => {
-    if (!auditResult) {
+  const onResolvePrincipalSuggestions = React.useCallback(async (
+    filterText: string,
+    currentSuggestions?: IPersonaProps[]
+  ): Promise<IPrincipalSuggestionPersona[]> => {
+    if (filterText.trim().length < 3) {
+      return [];
+    }
+
+    const directoryPeople: IDirectoryPersonInfo[] = await props.graphPermissionAuditService.searchPeopleAsync(filterText);
+    const selectedSuggestionKeys: Set<string> = new Set((currentSuggestions || []).map((suggestion) => `${suggestion.key}`));
+
+    return directoryPeople
+      .filter((directoryPerson) => !selectedSuggestionKeys.has(directoryPerson.id))
+      .map(toPrincipalSuggestionPersona);
+  }, [props.graphPermissionAuditService]);
+
+  const onPrincipalSelectionChange = React.useCallback((items?: IPersonaProps[]): void => {
+    setSelectedPrincipalSuggestions(((items as IPrincipalSuggestionPersona[] | undefined) || []).slice(0, 1));
+  }, []);
+
+  const onPrincipalSearchClear = React.useCallback((): void => {
+    latestPrincipalSearchRequestIdRef.current += 1;
+    setSelectedPrincipalSuggestions([]);
+    setSelectedDetailsHtml('');
+  }, []);
+
+  React.useEffect(() => {
+    const selectedPrincipal: IPrincipalSuggestionPersona | undefined = selectedPrincipalSuggestions[0];
+
+    if (!selectedPrincipal) {
       return;
     }
 
-    setSelectedDetailsHtml(buildPrincipalSearchDetailsHtml(
-      auditResult,
-      principalSearchText,
-      auditResult.associatedGroupIds
-    ));
-  }, [auditResult, principalSearchText]);
+    const requestId: number = latestPrincipalSearchRequestIdRef.current + 1;
+    latestPrincipalSearchRequestIdRef.current = requestId;
+    setIsPrincipalSearchLoading(true);
+    setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditLoadingLabel)}</p>`);
 
-  const onPrincipalSearchClear = React.useCallback((): void => {
-    setPrincipalSearchText('');
-    setSelectedDetailsHtml('');
-  }, []);
+    props.sharePointPermissionAuditService.searchPrincipalAccessAsync({
+      principal: selectedPrincipal.directoryPerson,
+      includeHiddenListsWithUniquePermissions: selectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1
+    }).then((searchResult) => {
+      if (latestPrincipalSearchRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setSelectedDetailsHtml(buildPrincipalSearchDetailsHtml(
+        searchResult,
+        searchResult.auditResult.associatedGroupIds
+      ));
+    }).catch((error) => {
+      if (latestPrincipalSearchRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+    }).then(() => {
+      if (latestPrincipalSearchRequestIdRef.current === requestId) {
+        setIsPrincipalSearchLoading(false);
+      }
+    }, () => {
+      if (latestPrincipalSearchRequestIdRef.current === requestId) {
+        setIsPrincipalSearchLoading(false);
+      }
+    });
+  }, [props.sharePointPermissionAuditService, selectedOptionKeys, selectedPrincipalSuggestions]);
 
   const onRenderGroupHeader = React.useCallback((
     groupHeaderProps?: IGroupHeaderProps,
@@ -777,6 +1019,71 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     );
   }, []);
 
+  const updateGridHeight = React.useCallback((nextGridHeight: number): void => {
+    const normalizedHeight: number = clamp(nextGridHeight, auditMinimumGridHeight, maximumGridHeight);
+
+    setAuditGridHeight(normalizedHeight);
+    writePanelHeightPreference(detailsPanelHeightPreferenceKey, normalizedHeight);
+  }, [detailsPanelHeightPreferenceKey, maximumGridHeight]);
+
+  const onResizeHandlePointerDown = React.useCallback((event: React.PointerEvent<HTMLButtonElement>): void => {
+    resizeStateRef.current = {
+      startY: event.clientY,
+      startHeight: auditGridHeight
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }, [auditGridHeight]);
+
+  const onResizeHandlePointerMove = React.useCallback((event: React.PointerEvent<HTMLButtonElement>): void => {
+    if (!resizeStateRef.current) {
+      return;
+    }
+
+    updateGridHeight(resizeStateRef.current.startHeight + (event.clientY - resizeStateRef.current.startY));
+  }, [updateGridHeight]);
+
+  const onResizeHandlePointerUp = React.useCallback((event: React.PointerEvent<HTMLButtonElement>): void => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    resizeStateRef.current = undefined;
+  }, []);
+
+  const onResizeHandlePointerCancel = React.useCallback((event: React.PointerEvent<HTMLButtonElement>): void => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    resizeStateRef.current = undefined;
+  }, []);
+
+  const onResizeHandleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    const resizeStep: number = event.shiftKey ? 48 : 24;
+
+    switch (event.key) {
+      case 'ArrowUp':
+        updateGridHeight(auditGridHeight - resizeStep);
+        event.preventDefault();
+        return;
+      case 'ArrowDown':
+        updateGridHeight(auditGridHeight + resizeStep);
+        event.preventDefault();
+        return;
+      case 'Home':
+        updateGridHeight(auditMinimumGridHeight);
+        event.preventDefault();
+        return;
+      case 'End':
+        updateGridHeight(maximumGridHeight);
+        event.preventDefault();
+        return;
+      default:
+        return;
+    }
+  }, [auditGridHeight, maximumGridHeight, updateGridHeight]);
+
   return (
     <section className={styles.auditPage}>
       <div className={styles.header}>
@@ -792,11 +1099,6 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
       />
 
       <Stack horizontal horizontalAlign="start" className={styles.commandBar}>
-        <PrimaryButton
-          text={strings.StartButtonLabel}
-          disabled={!isSharePointReady || isLoading}
-          onClick={onStartButtonClick}
-        />
         <DefaultButton
           iconProps={{ iconName: 'Download' }}
           text={strings.ExportCsvButtonLabel}
@@ -821,59 +1123,84 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
       </div>
 
       <Stack horizontal tokens={{ childrenGap: 8 }} className={styles.searchBar}>
-        <SearchBox
-          ariaLabel={strings.AuditPrincipalSearchLabel}
-          disabled={!auditResult || isLoading}
-          placeholder={strings.AuditPrincipalSearchPlaceholder}
-          value={principalSearchText}
-          onChange={(_, nextValue) => setPrincipalSearchText(nextValue || '')}
-          onSearch={onPrincipalSearch}
-        />
-        <DefaultButton
-          text={strings.AuditPrincipalSearchButtonLabel}
-          disabled={!auditResult || isLoading || principalSearchText.trim().length === 0}
-          onClick={onPrincipalSearch}
+        <NormalPeoplePicker
+          aria-label={strings.AuditPrincipalSearchLabel}
+          disabled={isLoading}
+          inputProps={{
+            'aria-label': strings.AuditPrincipalSearchLabel,
+            placeholder: strings.AuditPrincipalSearchPlaceholder
+          }}
+          itemLimit={1}
+          onChange={onPrincipalSelectionChange}
+          onResolveSuggestions={onResolvePrincipalSuggestions}
+          pickerSuggestionsProps={{
+            noResultsFoundText: strings.AuditPrincipalSearchNoResults
+          }}
+          resolveDelay={400}
+          selectedItems={selectedPrincipalSuggestions}
         />
         <DefaultButton
           text={strings.AuditPrincipalSearchClearButtonLabel}
-          disabled={principalSearchText.length === 0}
+          disabled={selectedPrincipalSuggestions.length === 0}
           onClick={onPrincipalSearchClear}
         />
       </Stack>
 
-      <div className={styles.grid} style={{ height: auditResultsGridHeight }}>
-        <ScrollablePane scrollbarVisibility={ScrollbarVisibility.always}>
-          <DetailsList
-            items={auditItems}
-            columns={auditColumns}
-            constrainMode={ConstrainMode.unconstrained}
-            groups={auditGroups}
-            groupProps={{
-              headerProps: {
-                styles: {
-                  headerCount: {
-                    display: 'none'
-                  }
-                }
-              },
-              onRenderHeader: onRenderGroupHeader,
-              showEmptyGroups: true
-            }}
-            selection={selectionRef.current}
-            selectionMode={SelectionMode.single}
-            layoutMode={DetailsListLayoutMode.justified}
-            onRenderDetailsHeader={onRenderDetailsHeader}
-            ariaLabelForGrid={strings.AuditResultsGridAriaLabel}
-          />
-        </ScrollablePane>
-      </div>
+      <div className={styles.splitPane} style={{ height: auditSplitPaneHeight }}>
+        <div className={styles.gridPane} style={{ height: auditGridHeight }}>
+          <div className={styles.grid}>
+            <ScrollablePane scrollbarVisibility={ScrollbarVisibility.always}>
+              <DetailsList
+                items={auditItems}
+                columns={auditColumns}
+                constrainMode={ConstrainMode.unconstrained}
+                groups={auditGroups}
+                groupProps={{
+                  headerProps: {
+                    styles: {
+                      headerCount: {
+                        display: 'none'
+                      }
+                    }
+                  },
+                  onRenderHeader: onRenderGroupHeader,
+                  showEmptyGroups: true
+                }}
+                selection={selectionRef.current}
+                selectionMode={SelectionMode.single}
+                layoutMode={DetailsListLayoutMode.justified}
+                onRenderDetailsHeader={onRenderDetailsHeader}
+                ariaLabelForGrid={strings.AuditResultsGridAriaLabel}
+              />
+            </ScrollablePane>
+          </div>
+        </div>
 
-      <HtmlContentDisplay
-        ariaLabel={strings.AuditDetailsContentAriaLabel}
-        className={styles.detailsContent}
-        height={auditDetailsContentHeight}
-        html={selectedDetailsHtml}
-      />
+        <button
+          aria-label={strings.AuditSplitResizeHandleAriaLabel}
+          aria-orientation="horizontal"
+          aria-valuemax={maximumGridHeight}
+          aria-valuemin={auditMinimumGridHeight}
+          aria-valuenow={auditGridHeight}
+          className={styles.resizeHandle}
+          onKeyDown={onResizeHandleKeyDown}
+          onPointerCancel={onResizeHandlePointerCancel}
+          onPointerDown={onResizeHandlePointerDown}
+          onPointerMove={onResizeHandlePointerMove}
+          onPointerUp={onResizeHandlePointerUp}
+          role="separator"
+          type="button"
+        />
+
+        <div className={styles.detailsPane} style={{ height: auditDetailsContentHeight }}>
+          <HtmlContentDisplay
+            ariaLabel={strings.AuditDetailsContentAriaLabel}
+            className={styles.detailsContent}
+            height={auditDetailsContentHeight}
+            html={selectedDetailsHtml}
+          />
+        </div>
+      </div>
     </section>
   );
 };

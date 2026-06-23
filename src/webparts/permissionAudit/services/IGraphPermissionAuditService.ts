@@ -1,5 +1,14 @@
 import type { IPermissionAuditItem, IPermissionAuditLevel } from '../models';
 
+export interface IDirectoryPersonInfo {
+  id: string;
+  displayName: string;
+  email?: string;
+  userPrincipalName?: string;
+  jobTitle?: string;
+  department?: string;
+}
+
 export interface IGraphGroupExpansionRequest {
   groupDisplayName: string;
   groupAadObjectId?: string;
@@ -12,4 +21,5 @@ export interface IGraphGroupExpansionRequest {
 
 export interface IGraphPermissionAuditService {
   expandGroupMembersAsync(request: IGraphGroupExpansionRequest): Promise<IPermissionAuditItem[]>;
+  searchPeopleAsync(searchText: string): Promise<IDirectoryPersonInfo[]>;
 }

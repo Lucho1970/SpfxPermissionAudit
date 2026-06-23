@@ -1,6 +1,6 @@
 import type { MSGraphClientFactory, MSGraphClientV3 } from '@microsoft/sp-http-msgraph';
 import type { IPermissionAuditItem } from '../models';
-import type { IGraphGroupExpansionRequest, IGraphPermissionAuditService } from './IGraphPermissionAuditService';
+import type { IDirectoryPersonInfo, IGraphGroupExpansionRequest, IGraphPermissionAuditService } from './IGraphPermissionAuditService';
 
 interface IGraphDirectoryObject {
   id: string;
@@ -49,6 +49,36 @@ const getGroupClaimRole = (loginName: string | undefined): GraphGroupClaimRole =
 
 export class GraphPermissionAuditService implements IGraphPermissionAuditService {
   public constructor(private readonly _msGraphClientFactory?: MSGraphClientFactory) {
+  }
+
+  public async searchPeopleAsync(searchText: string): Promise<IDirectoryPersonInfo[]> {
+    const normalizedSearchText: string = searchText.trim();
+
+    if (normalizedSearchText.length < 3 || !this._msGraphClientFactory) {
+      return [];
+    }
+
+    const escapedSearchText: string = normalizedSearchText.replace(/'/g, "''");
+    const filter: string = [
+      `startswith(displayName,'${escapedSearchText}')`,
+      `startswith(mail,'${escapedSearchText}')`,
+      `startswith(userPrincipalName,'${escapedSearchText}')`
+    ].join(' or ');
+    const path: string =
+      `/users?$select=id,displayName,mail,userPrincipalName,jobTitle,department&$top=8&$filter=${filter}`;
+    const client: MSGraphClientV3 = await this._msGraphClientFactory.getClient('3');
+    const response: IGraphCollectionResponse<IGraphDirectoryObject> = await client.api(path).version('v1.0').get();
+
+    return response.value
+      .filter((person) => !!person.id)
+      .map((person) => ({
+        id: person.id,
+        displayName: toDisplayText(person.displayName || person.userPrincipalName || person.mail || person.id),
+        email: toDisplayText(person.mail),
+        userPrincipalName: toDisplayText(person.userPrincipalName),
+        jobTitle: toDisplayText(person.jobTitle),
+        department: toDisplayText(person.department)
+      }));
   }
 
   public async expandGroupMembersAsync(request: IGraphGroupExpansionRequest): Promise<IPermissionAuditItem[]> {

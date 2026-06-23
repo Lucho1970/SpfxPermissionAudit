@@ -1,9 +1,12 @@
 import type { SPFI } from '@pnp/sp';
 import type { IPermissionAuditItem, IPermissionAuditLevel } from '../models';
-import type { IGraphPermissionAuditService } from './IGraphPermissionAuditService';
+import type { IDirectoryPersonInfo, IGraphPermissionAuditService } from './IGraphPermissionAuditService';
 import type {
   IAssociatedSharePointGroupIds,
   ICurrentSitePermissionGroupsResult,
+  IPrincipalAccessMatch,
+  IPrincipalAccessSearchRequest,
+  IPrincipalAccessSearchResult,
   ISharePointPermissionAuditOptions,
   ISharePointPermissionAuditService
 } from './ISharePointPermissionAuditService';
@@ -100,6 +103,7 @@ const distributionListPrincipalType: number = 2;
 const securityGroupPrincipalType: number = 4;
 
 const toDisplayText = (value: unknown): string => `${value ?? ''}`;
+const normalizeIdentityValue = (value: unknown): string => toDisplayText(value).trim().toLowerCase();
 
 const hasPrincipalType = (principalType: number, expectedPrincipalType: number): boolean =>
   (principalType & expectedPrincipalType) === expectedPrincipalType;
@@ -128,6 +132,14 @@ const toPermissionLevels = (assignment: IRoleAssignmentInfo | undefined): IPermi
 
 const hasOnlyLimitedAccess = (permissionLevels: IPermissionAuditLevel[]): boolean =>
   permissionLevels.length === 1 && permissionLevels[0].name === 'Limited Access';
+
+const isSecurableObject = (permissionItem: IPermissionAuditItem): boolean =>
+  permissionItem.principalType === 'Site' || permissionItem.principalType === 'List' || permissionItem.principalType === 'ListItem';
+
+const findNearestScope = (permissionItem: IPermissionAuditItem, ancestors: IPermissionAuditItem[]): IPermissionAuditItem =>
+  isSecurableObject(permissionItem)
+    ? permissionItem
+    : ancestors.slice().reverse().find((ancestor) => isSecurableObject(ancestor)) || permissionItem;
 
 export class SharePointPermissionAuditService implements ISharePointPermissionAuditService {
   public constructor(
@@ -269,6 +281,21 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     }
 
     return result;
+  }
+
+  public async searchPrincipalAccessAsync(request: IPrincipalAccessSearchRequest): Promise<IPrincipalAccessSearchResult> {
+    const auditResult: ICurrentSitePermissionGroupsResult = await this.getPermissionAuditAsync({
+      expandGroups: true,
+      includeHiddenListsWithUniquePermissions: request.includeHiddenListsWithUniquePermissions,
+      includeListItemsWithUniquePermissions: true,
+      includeListsWithUniquePermissions: true
+    });
+
+    return {
+      principal: request.principal,
+      auditResult,
+      matches: this._findPrincipalAccessMatches(auditResult.groups, request.principal)
+    };
   }
 
   private async _getListsForPermissionAuditAsync(options: ISharePointPermissionAuditOptions): Promise<ISharePointListInfo[]> {
@@ -658,5 +685,46 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
 
   private _extractAadObjectIdFromLoginName(loginName: string | undefined): string | undefined {
     return loginName?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0];
+  }
+
+  private _findPrincipalAccessMatches(
+    permissionItems: IPermissionAuditItem[],
+    principal: IDirectoryPersonInfo,
+    ancestors: IPermissionAuditItem[] = []
+  ): IPrincipalAccessMatch[] {
+    const principalIdentityValues: Set<string> = new Set([
+      principal.displayName,
+      principal.email,
+      principal.userPrincipalName
+    ].map(normalizeIdentityValue).filter((value) => !!value));
+
+    return permissionItems.reduce((matches: IPrincipalAccessMatch[], permissionItem) => {
+      if (
+        permissionItem.principalType === 'User' &&
+        this._permissionItemMatchesPrincipal(permissionItem, principalIdentityValues)
+      ) {
+        matches.push({
+          matchItem: permissionItem,
+          scopeItem: findNearestScope(permissionItem, ancestors)
+        });
+      }
+
+      if (permissionItem.children?.length) {
+        matches.push(...this._findPrincipalAccessMatches(permissionItem.children, principal, [...ancestors, permissionItem]));
+      }
+
+      return matches;
+    }, []);
+  }
+
+  private _permissionItemMatchesPrincipal(permissionItem: IPermissionAuditItem, principalIdentityValues: Set<string>): boolean {
+    const permissionItemIdentityValues: string[] = [
+      permissionItem.displayName,
+      permissionItem.loginName,
+      permissionItem.personDetails?.email,
+      permissionItem.personDetails?.userPrincipalName
+    ].map(normalizeIdentityValue).filter((value) => !!value);
+
+    return permissionItemIdentityValues.some((value) => principalIdentityValues.has(value));
   }
 }
