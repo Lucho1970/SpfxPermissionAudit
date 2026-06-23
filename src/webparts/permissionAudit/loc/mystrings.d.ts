@@ -2,6 +2,8 @@ declare interface IPermissionAuditWebPartStrings {
   PropertyPaneDescription: string;
   BasicGroupName: string;
   DescriptionFieldLabel: string;
+  GroupExpansionBatchSizeFieldLabel: string;
+  GroupExpansionBatchSizeFieldDescription: string;
   AppLocalEnvironmentSharePoint: string;
   AppLocalEnvironmentTeams: string;
   AppLocalEnvironmentOffice: string;
@@ -50,12 +52,15 @@ declare interface IPermissionAuditWebPartStrings {
   AuditPrincipalTypeSecurityGroup: string;
   AuditPrincipalTypeList: string;
   AuditPrincipalTypeListItem: string;
+  AuditPrincipalTypeLoadMore: string;
   AuditPrincipalTypeSite: string;
   AuditPrincipalTypeUnknown: string;
   AuditPrincipalTypeUser: string;
   AuditUserCountSingular: string;
   AuditUserCountPlural: string;
   AuditDirectPermissionsGroupLabel: string;
+  AuditLoadRemainingGroupMembersLabel: string;
+  AuditLoadRemainingGroupMembersDetails: string;
   AuditGroupNoDirectPermissions: string;
   AuditGroupYes: string;
   AuditGroupNo: string;

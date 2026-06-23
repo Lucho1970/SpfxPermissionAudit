@@ -101,6 +101,7 @@ const sharePointGroupPrincipalType: number = 8;
 const userPrincipalType: number = 1;
 const distributionListPrincipalType: number = 2;
 const securityGroupPrincipalType: number = 4;
+const defaultGroupExpansionBatchSize: number = 100;
 
 const toDisplayText = (value: unknown): string => `${value ?? ''}`;
 const normalizeIdentityValue = (value: unknown): string => toDisplayText(value).trim().toLowerCase();
@@ -154,8 +155,11 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     return result.groups;
   }
 
-  public async getCurrentSitePermissionGroupsWithMetadataAsync(expandGroups?: boolean): Promise<ICurrentSitePermissionGroupsResult> {
-    const result: ICurrentSitePermissionGroupsResult = await this.getPermissionAuditAsync({ expandGroups });
+  public async getCurrentSitePermissionGroupsWithMetadataAsync(
+    expandGroups?: boolean,
+    groupExpansionBatchSize?: number
+  ): Promise<ICurrentSitePermissionGroupsResult> {
+    const result: ICurrentSitePermissionGroupsResult = await this.getPermissionAuditAsync({ expandGroups, groupExpansionBatchSize });
     const siteNode: IPermissionAuditItem | undefined = result.groups[0];
 
     return {
@@ -165,6 +169,7 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
   }
 
   public async getPermissionAuditAsync(options: ISharePointPermissionAuditOptions): Promise<ICurrentSitePermissionGroupsResult> {
+    const groupExpansionBatchSize: number = this._normalizeGroupExpansionBatchSize(options.groupExpansionBatchSize);
     const [
       webInfo,
       groups,
@@ -221,14 +226,15 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
           toDisplayText(webInfo.Title),
           [toDisplayText(webInfo.Title)],
           1,
-          options.expandGroups
+          options.expandGroups,
+          groupExpansionBatchSize
         )
       ));
 
     if (options.expandGroups) {
       [permissionGroups, directSitePermissions] = await Promise.all([
         Promise.all(permissionGroups.map((permissionGroup) =>
-          this._withExpandedPermissionItemGroupAsync(permissionGroup, new Set<string>([permissionGroup.key]))
+          this._withExpandedPermissionItemGroupAsync(permissionGroup, new Set<string>([permissionGroup.key]), groupExpansionBatchSize)
         )),
         Promise.resolve(directSitePermissions)
       ]);
@@ -286,6 +292,7 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
   public async searchPrincipalAccessAsync(request: IPrincipalAccessSearchRequest): Promise<IPrincipalAccessSearchResult> {
     const auditResult: ICurrentSitePermissionGroupsResult = await this.getPermissionAuditAsync({
       expandGroups: true,
+      groupExpansionBatchSize: request.groupExpansionBatchSize,
       includeHiddenListsWithUniquePermissions: request.includeHiddenListsWithUniquePermissions,
       includeListItemsWithUniquePermissions: true,
       includeListsWithUniquePermissions: true
@@ -296,6 +303,40 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
       auditResult,
       matches: this._findPrincipalAccessMatches(auditResult.groups, request.principal)
     };
+  }
+
+  public async loadDeferredGroupMembersAsync(loadMoreItem: IPermissionAuditItem): Promise<IPermissionAuditItem[]> {
+    const deferredDetails = loadMoreItem.deferredGroupMembersDetails;
+
+    if (!deferredDetails) {
+      return [];
+    }
+
+    if (deferredDetails.source === 'GraphGroup') {
+      return this._graphPermissionAuditService.loadDeferredGroupMembersAsync(loadMoreItem);
+    }
+
+    if (!deferredDetails.sharePointGroupId) {
+      return [];
+    }
+
+    const groupExpansionBatchSize: number = this._normalizeGroupExpansionBatchSize(deferredDetails.batchSize);
+    const offset: number = deferredDetails.sharePointNextOffset || 0;
+    const members: ISiteUserInfo[] = await this._sp.web.siteGroups
+      .getById(deferredDetails.sharePointGroupId)
+      .users
+      .select('Email', 'Id', 'IsHiddenInUI', 'IsSiteAdmin', 'LoginName', 'PrincipalType', 'Title', 'UserId', 'UserPrincipalName')
+      .top(5000)();
+    const visibleMembers: ISiteUserInfo[] = members.slice(offset);
+    const parentGroup: IPermissionAuditItem = this._toDeferredParentGroup(loadMoreItem);
+    return Promise.all(visibleMembers.map((member) =>
+      this._toPermissionAuditMemberItemAsync(
+        member,
+        parentGroup,
+        new Set<string>(deferredDetails.visitedSharePointGroupIds || []),
+        groupExpansionBatchSize
+      )
+    ));
   }
 
   private async _getListsForPermissionAuditAsync(options: ISharePointPermissionAuditOptions): Promise<ISharePointListInfo[]> {
@@ -326,6 +367,7 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     options: ISharePointPermissionAuditOptions,
     includePermissionChildren: boolean
   ): Promise<IPermissionAuditItem> {
+    const groupExpansionBatchSize: number = this._normalizeGroupExpansionBatchSize(options.groupExpansionBatchSize);
     const listNode: IPermissionAuditItem = this._toListContainerAuditItem(list);
 
     if (!includePermissionChildren) {
@@ -343,7 +385,8 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
         listNode.displayName,
         listNode.path,
         listNode.depth + 1,
-        options.expandGroups
+        options.expandGroups,
+        groupExpansionBatchSize
       )
     ));
 
@@ -407,6 +450,7 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     listItem: ISharePointListItemInfo,
     options: ISharePointPermissionAuditOptions
   ): Promise<IPermissionAuditItem> {
+    const groupExpansionBatchSize: number = this._normalizeGroupExpansionBatchSize(options.groupExpansionBatchSize);
     const listId: string = listNode.key.replace(/^list-/, '');
     const itemDisplayName: string = toDisplayText(listItem.FileLeafRef || listItem.Title || `Item ${listItem.Id}`);
     const itemKey: string = `${listNode.key}|item-${listItem.Id}`;
@@ -424,7 +468,8 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
         itemDisplayName,
         itemPath,
         listNode.depth + 2,
-        options.expandGroups
+        options.expandGroups,
+        groupExpansionBatchSize
       )
     ));
 
@@ -455,7 +500,8 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     parentDisplayName: string,
     parentPath: string[],
     depth: number,
-    expandGroups?: boolean
+    expandGroups?: boolean,
+    groupExpansionBatchSize: number = defaultGroupExpansionBatchSize
   ): Promise<IPermissionAuditItem> {
     const member = assignment.Member;
     const permissionLevels: IPermissionAuditLevel[] = toPermissionLevels(assignment);
@@ -479,12 +525,17 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     }
 
     if (hasPrincipalType(member.PrincipalType, sharePointGroupPrincipalType)) {
-      return this._withExpandedPermissionItemGroupAsync(baseItem, new Set<string>([parentKey, assignment.PrincipalId.toString()]));
+      return this._withExpandedPermissionItemGroupAsync(
+        baseItem,
+        new Set<string>([parentKey, assignment.PrincipalId.toString()]),
+        groupExpansionBatchSize
+      );
     }
 
     if (hasPrincipalType(member.PrincipalType, securityGroupPrincipalType) ||
       hasPrincipalType(member.PrincipalType, distributionListPrincipalType)) {
       const children: IPermissionAuditItem[] = await this._graphPermissionAuditService.expandGroupMembersAsync({
+        batchSize: groupExpansionBatchSize,
         groupAadObjectId: this._extractAadObjectIdFromLoginName(member.LoginName),
         groupDisplayName: displayName,
         groupLoginName: member.LoginName,
@@ -505,7 +556,8 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
 
   private async _withExpandedPermissionItemGroupAsync(
     permissionGroup: IPermissionAuditItem,
-    visitedGroupKeys: Set<string>
+    visitedGroupKeys: Set<string>,
+    groupExpansionBatchSize: number
   ): Promise<IPermissionAuditItem> {
     if (!permissionGroup.principalId) {
       return permissionGroup;
@@ -515,21 +567,32 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
       .getById(permissionGroup.principalId)
       .users
       .select('Email', 'Id', 'IsHiddenInUI', 'IsSiteAdmin', 'LoginName', 'PrincipalType', 'Title', 'UserId', 'UserPrincipalName')
-      .top(5000)();
-    const childItems: IPermissionAuditItem[] = await Promise.all(members.map((member) =>
-      this._toPermissionAuditMemberItemAsync(member, permissionGroup, visitedGroupKeys)
+      .top(groupExpansionBatchSize + 1)();
+    const visibleMembers: ISiteUserInfo[] = members.slice(0, groupExpansionBatchSize);
+    const childItems: IPermissionAuditItem[] = await Promise.all(visibleMembers.map((member) =>
+      this._toPermissionAuditMemberItemAsync(member, permissionGroup, visitedGroupKeys, groupExpansionBatchSize)
     ));
 
     return {
       ...permissionGroup,
-      children: childItems
+      children: [
+        ...childItems,
+        ...this._toDeferredSharePointGroupMembersItems(
+          permissionGroup,
+          groupExpansionBatchSize,
+          visibleMembers.length,
+          members.length,
+          Array.from(visitedGroupKeys)
+        )
+      ]
     };
   }
 
   private async _toPermissionAuditMemberItemAsync(
     member: ISiteUserInfo,
     parentGroup: IPermissionAuditItem,
-    visitedGroupKeys: Set<string>
+    visitedGroupKeys: Set<string>,
+    groupExpansionBatchSize: number
   ): Promise<IPermissionAuditItem> {
     const memberKey: string = `${parentGroup.key}|${member.PrincipalType}|${member.Id}`;
     const displayName: string = toDisplayText(member.Title || member.UserPrincipalName || member.Email || member.LoginName);
@@ -560,12 +623,13 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
       const nextVisitedGroupKeys: Set<string> = new Set(visitedGroupKeys);
       nextVisitedGroupKeys.add(member.Id.toString());
 
-      return this._withExpandedPermissionItemGroupAsync(baseItem, nextVisitedGroupKeys);
+      return this._withExpandedPermissionItemGroupAsync(baseItem, nextVisitedGroupKeys, groupExpansionBatchSize);
     }
 
     if (hasPrincipalType(member.PrincipalType, securityGroupPrincipalType) ||
       hasPrincipalType(member.PrincipalType, distributionListPrincipalType)) {
       const children: IPermissionAuditItem[] = await this._graphPermissionAuditService.expandGroupMembersAsync({
+        batchSize: groupExpansionBatchSize,
         groupAadObjectId: baseItem.groupDetails?.aadObjectId,
         groupDisplayName: displayName,
         groupLoginName: member.LoginName,
@@ -582,6 +646,65 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     }
 
     return baseItem;
+  }
+
+  private _toDeferredParentGroup(loadMoreItem: IPermissionAuditItem): IPermissionAuditItem {
+    const deferredDetails = loadMoreItem.deferredGroupMembersDetails;
+
+    return {
+      key: deferredDetails?.parentGroupKey || toDisplayText(loadMoreItem.parentKey),
+      displayName: loadMoreItem.path.slice(-2, -1)[0] || toDisplayText(loadMoreItem.parentKey),
+      principalType: 'SharePointGroup',
+      sourceType: deferredDetails?.parentGroupSourceType || 'DirectPermission',
+      permissionLevels: loadMoreItem.permissionLevels,
+      depth: deferredDetails?.parentGroupDepth || Math.max(loadMoreItem.depth - 1, 0),
+      path: deferredDetails?.parentGroupPath || loadMoreItem.path.slice(0, -1),
+      principalId: deferredDetails?.sharePointGroupId,
+      children: []
+    };
+  }
+
+  private _toDeferredSharePointGroupMembersItems(
+    parentGroup: IPermissionAuditItem,
+    groupExpansionBatchSize: number,
+    nextOffset: number,
+    retrievedCount: number,
+    visitedSharePointGroupIds: string[]
+  ): IPermissionAuditItem[] {
+    if (retrievedCount <= nextOffset || !parentGroup.principalId) {
+      return [];
+    }
+
+    return [{
+      key: `${parentGroup.key}|sp-load-more|${nextOffset}`,
+      displayName: 'Load remaining group members',
+      principalType: 'LoadMore',
+      sourceType: 'DeferredGroupMembers',
+      permissionLevels: parentGroup.permissionLevels,
+      depth: parentGroup.depth + 1,
+      path: [...parentGroup.path, 'Load remaining group members'],
+      parentKey: parentGroup.key,
+      deferredGroupMembersDetails: {
+        batchSize: groupExpansionBatchSize,
+        parentGroupDepth: parentGroup.depth,
+        parentGroupKey: parentGroup.key,
+        parentGroupPath: parentGroup.path,
+        parentGroupSourceType: parentGroup.sourceType,
+        sharePointGroupId: parentGroup.principalId,
+        sharePointNextOffset: nextOffset,
+        source: 'SharePointGroup',
+        visitedSharePointGroupIds
+      },
+      children: []
+    }];
+  }
+
+  private _normalizeGroupExpansionBatchSize(groupExpansionBatchSize: number | undefined): number {
+    if (!groupExpansionBatchSize || groupExpansionBatchSize < 1) {
+      return defaultGroupExpansionBatchSize;
+    }
+
+    return Math.min(Math.floor(groupExpansionBatchSize), 5000);
   }
 
   private _toPermissionAuditItem(

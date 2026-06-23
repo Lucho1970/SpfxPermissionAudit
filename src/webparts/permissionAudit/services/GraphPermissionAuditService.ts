@@ -19,6 +19,8 @@ interface IGraphCollectionResponse<TItem> {
 
 type GraphGroupClaimRole = 'Members' | 'Owners';
 
+const defaultGroupExpansionBatchSize: number = 100;
+
 const toDisplayText = (value: unknown): string => `${value ?? ''}`;
 
 const getFirstGuid = (value: string | undefined): string | undefined =>
@@ -46,6 +48,9 @@ const getGroupClaimRole = (loginName: string | undefined): GraphGroupClaimRole =
       return 'Members';
   }
 };
+
+const toGraphApiPath = (pathOrUrl: string): string =>
+  pathOrUrl.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, '');
 
 export class GraphPermissionAuditService implements IGraphPermissionAuditService {
   public constructor(private readonly _msGraphClientFactory?: MSGraphClientFactory) {
@@ -91,11 +96,16 @@ export class GraphPermissionAuditService implements IGraphPermissionAuditService
       )];
     }
 
-    let members: IGraphDirectoryObject[] = [];
+    let response: IGraphCollectionResponse<IGraphDirectoryObject>;
 
     try {
       const client: MSGraphClientV3 = await this._msGraphClientFactory.getClient('3');
-      members = await this._getGroupPrincipalsAsync(client, aadObjectId, getGroupClaimRole(request.groupLoginName));
+      response = await this._getGroupPrincipalsPageAsync(
+        client,
+        aadObjectId,
+        getGroupClaimRole(request.groupLoginName),
+        request.batchSize || defaultGroupExpansionBatchSize
+      );
     } catch (error) {
       return [this._toExpansionErrorItem(
         request,
@@ -103,7 +113,49 @@ export class GraphPermissionAuditService implements IGraphPermissionAuditService
       )];
     }
 
-    return members.map((member) => ({
+    return [
+      ...response.value.map((member) => this._toDirectoryObjectAuditItem(member, request)),
+      ...this._toDeferredGroupMembersItems(request, response['@odata.nextLink'], aadObjectId)
+    ];
+  }
+
+  public async loadDeferredGroupMembersAsync(loadMoreItem: IPermissionAuditItem): Promise<IPermissionAuditItem[]> {
+    const deferredDetails = loadMoreItem.deferredGroupMembersDetails;
+
+    if (!deferredDetails?.graphNextLink || !this._msGraphClientFactory) {
+      return [];
+    }
+
+    const request: IGraphGroupExpansionRequest = {
+      batchSize: deferredDetails.batchSize,
+      groupAadObjectId: deferredDetails.graphGroupAadObjectId,
+      groupDisplayName: loadMoreItem.displayName,
+      groupLoginName: deferredDetails.graphGroupLoginName,
+      inheritedPermissionLevels: loadMoreItem.permissionLevels,
+      parentKey: deferredDetails.parentGroupKey,
+      parentPath: deferredDetails.parentGroupPath,
+      depth: deferredDetails.parentGroupDepth + 1
+    };
+    const client: MSGraphClientV3 = await this._msGraphClientFactory.getClient('3');
+    const members: IGraphDirectoryObject[] = [];
+    let nextLink: string | undefined = deferredDetails.graphNextLink;
+
+    while (nextLink) {
+      const response: IGraphCollectionResponse<IGraphDirectoryObject> =
+        await client.api(toGraphApiPath(nextLink)).version('v1.0').get();
+
+      members.push(...response.value);
+      nextLink = response['@odata.nextLink'];
+    }
+
+    return members.map((member) => this._toDirectoryObjectAuditItem(member, request));
+  }
+
+  private _toDirectoryObjectAuditItem(
+    member: IGraphDirectoryObject,
+    request: IGraphGroupExpansionRequest
+  ): IPermissionAuditItem {
+    return {
       key: `${request.parentKey}|graph|${member.id}`,
       displayName: toDisplayText(member.displayName || member.userPrincipalName || member.mail || member.id),
       principalType: isGraphGroup(member) ? 'SecurityGroup' : 'User',
@@ -123,7 +175,42 @@ export class GraphPermissionAuditService implements IGraphPermissionAuditService
         department: toDisplayText(member.department)
       },
       children: []
-    }));
+    };
+  }
+
+  private _toDeferredGroupMembersItems(
+    request: IGraphGroupExpansionRequest,
+    nextLink: string | undefined,
+    aadObjectId: string | undefined
+  ): IPermissionAuditItem[] {
+    if (!nextLink) {
+      return [];
+    }
+
+    const batchSize: number = request.batchSize || defaultGroupExpansionBatchSize;
+
+    return [{
+      key: `${request.parentKey}|graph-load-more|${encodeURIComponent(nextLink)}`,
+      displayName: 'Load remaining group members',
+      principalType: 'LoadMore',
+      sourceType: 'DeferredGroupMembers',
+      permissionLevels: request.inheritedPermissionLevels,
+      depth: request.depth,
+      path: [...request.parentPath, 'Load remaining group members'],
+      parentKey: request.parentKey,
+      deferredGroupMembersDetails: {
+        batchSize,
+        graphGroupAadObjectId: aadObjectId,
+        graphGroupLoginName: request.groupLoginName,
+        graphNextLink: nextLink,
+        parentGroupDepth: request.depth - 1,
+        parentGroupKey: request.parentKey,
+        parentGroupPath: request.parentPath,
+        parentGroupSourceType: 'ExpandedGroupMember',
+        source: 'GraphGroup'
+      },
+      children: []
+    }];
   }
 
   private _toExpansionErrorItem(request: IGraphGroupExpansionRequest, message: string): IPermissionAuditItem {
@@ -143,22 +230,16 @@ export class GraphPermissionAuditService implements IGraphPermissionAuditService
     };
   }
 
-  private async _getGroupPrincipalsAsync(
+  private async _getGroupPrincipalsPageAsync(
     client: MSGraphClientV3,
     aadObjectId: string,
-    claimRole: GraphGroupClaimRole
-  ): Promise<IGraphDirectoryObject[]> {
-    const members: IGraphDirectoryObject[] = [];
+    claimRole: GraphGroupClaimRole,
+    batchSize: number
+  ): Promise<IGraphCollectionResponse<IGraphDirectoryObject>> {
     const relationship: string = claimRole === 'Owners' ? 'owners' : 'transitiveMembers';
-    let path: string | undefined =
-      `/groups/${aadObjectId}/${relationship}?$select=id,displayName,mail,userPrincipalName,jobTitle,department&$top=999`;
+    const path: string =
+      `/groups/${aadObjectId}/${relationship}?$select=id,displayName,mail,userPrincipalName,jobTitle,department&$top=${batchSize}`;
 
-    while (path) {
-      const response: IGraphCollectionResponse<IGraphDirectoryObject> = await client.api(path).version('v1.0').get();
-      members.push(...response.value);
-      path = response['@odata.nextLink'];
-    }
-
-    return members;
+    return client.api(path).version('v1.0').get();
   }
 }

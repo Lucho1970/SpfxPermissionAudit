@@ -1,6 +1,7 @@
 export type PermissionAuditPrincipalType =
   | 'List'
   | 'ListItem'
+  | 'LoadMore'
   | 'Site'
   | 'SharePointGroup'
   | 'SecurityGroup'
@@ -11,6 +12,7 @@ export type PermissionAuditPrincipalType =
 
 export type PermissionAuditSourceType =
   | 'DirectPermission'
+  | 'DeferredGroupMembers'
   | 'SecurableObject'
   | 'SharePointGroupMember'
   | 'NestedGroupMember'
@@ -58,6 +60,26 @@ export interface IPermissionAuditItemDetail {
   value: string;
 }
 
+export type PermissionAuditDeferredGroupMemberSource =
+  | 'GraphGroup'
+  | 'SharePointGroup';
+
+export interface IPermissionAuditDeferredGroupMembersDetails {
+  batchSize: number;
+  graphGroupAadObjectId?: string;
+  graphGroupLoginName?: string;
+  graphNextLink?: string;
+  graphRelationship?: string;
+  parentGroupDepth: number;
+  parentGroupKey: string;
+  parentGroupPath: string[];
+  parentGroupSourceType: PermissionAuditSourceType;
+  sharePointGroupId?: number;
+  sharePointNextOffset?: number;
+  source: PermissionAuditDeferredGroupMemberSource;
+  visitedSharePointGroupIds?: string[];
+}
+
 export interface IPermissionAuditItem {
   key: string;
   displayName: string;
@@ -74,5 +96,6 @@ export interface IPermissionAuditItem {
   objectDetails?: IPermissionAuditObjectDetails;
   personDetails?: IPermissionAuditPersonDetails;
   details?: IPermissionAuditItemDetail[];
+  deferredGroupMembersDetails?: IPermissionAuditDeferredGroupMembersDetails;
   children?: IPermissionAuditItem[];
 }

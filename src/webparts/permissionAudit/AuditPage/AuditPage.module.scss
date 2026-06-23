@@ -63,6 +63,25 @@
   background-color: var(--bodyBackground);
 }
 
+.gridLoadingOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.72);
+  background-color: color-mix(in srgb, var(--bodyBackground) 72%, transparent);
+  pointer-events: none;
+}
+
+.loadMoreLink {
+  color: "[theme:link, default: #0078d4]";
+  color: var(--link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .resizeHandle {
   position: relative;
   height: 12px;

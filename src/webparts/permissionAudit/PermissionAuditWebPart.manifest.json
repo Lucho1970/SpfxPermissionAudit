@@ -22,7 +22,8 @@
     "description": { "default": "PermissionAudit description" },
     "officeFabricIconFontName": "Page",
     "properties": {
-      "description": "PermissionAudit"
+      "description": "PermissionAudit",
+      "groupExpansionBatchSize": 100
     }
   }]
 }

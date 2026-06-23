@@ -24,6 +24,7 @@ import {
 
 export interface IPermissionAuditWebPartProps {
   description: string;
+  groupExpansionBatchSize: number;
 }
 
 export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermissionAuditWebPartProps> {
@@ -44,6 +45,7 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
         hasTeamsContext: !!this.context.sdks.microsoftTeams,
         userDisplayName: this.context.pageContext.user.displayName,
         graphPermissionAuditService: this._graphPermissionAuditService,
+        groupExpansionBatchSize: this._getGroupExpansionBatchSize(),
         groupedViewPreferenceKey: this._getGroupedViewPreferenceKey(),
         sharePointPermissionAuditService: this._sharePointPermissionAuditService
       }
@@ -100,6 +102,16 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
     return `PermissionAudit:${tenantId}:${userLoginName}:GroupedView`;
   }
 
+  private _getGroupExpansionBatchSize(): number {
+    const configuredBatchSize: number = Number(this.properties.groupExpansionBatchSize);
+
+    if (!configuredBatchSize || configuredBatchSize < 1) {
+      return 100;
+    }
+
+    return Math.min(Math.floor(configuredBatchSize), 5000);
+  }
+
   protected onThemeChanged(currentTheme: IReadonlyTheme | undefined): void {
     if (!currentTheme) {
       return;
@@ -154,6 +166,10 @@ export default class PermissionAuditWebPart extends BaseClientSideWebPart<IPermi
               groupFields: [
                 PropertyPaneTextField('description', {
                   label: strings.DescriptionFieldLabel
+                }),
+                PropertyPaneTextField('groupExpansionBatchSize', {
+                  label: strings.GroupExpansionBatchSizeFieldLabel,
+                  description: strings.GroupExpansionBatchSizeFieldDescription
                 })
               ]
             }

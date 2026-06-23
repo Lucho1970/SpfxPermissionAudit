@@ -64,7 +64,10 @@ const auditColumns: IColumn[] = [
     fieldName: 'groupName',
     minWidth: 160,
     maxWidth: 280,
-    isResizable: true
+    isResizable: true,
+    onRender: (item?: IAuditGridItem): JSX.Element | string => item?.permissionItem.principalType === 'LoadMore'
+      ? <span className={(styles as unknown as { [key: string]: string }).loadMoreLink}>{strings.AuditLoadRemainingGroupMembersLabel}</span>
+      : `${item?.groupName ?? ''}`
   },
   {
     key: 'principalType',
@@ -189,6 +192,8 @@ const getPrincipalTypeLabel = (
       return strings.AuditPrincipalTypeList;
     case 'ListItem':
       return strings.AuditPrincipalTypeListItem;
+    case 'LoadMore':
+      return strings.AuditPrincipalTypeLoadMore;
     case 'Microsoft365Group':
       return strings.AuditPrincipalTypeMicrosoft365Group;
     case 'SecurityGroup':
@@ -203,6 +208,11 @@ const getPrincipalTypeLabel = (
       return strings.AuditPrincipalTypeUnknown;
   }
 };
+
+const getDisplayName = (permissionItem: IPermissionAuditItem): string =>
+  permissionItem.principalType === 'LoadMore'
+    ? strings.AuditLoadRemainingGroupMembersLabel
+    : permissionItem.displayName;
 
 const getGroupPath = (permissionItem: IPermissionAuditItem): string => {
   if (permissionItem.path.length <= 1) {
@@ -476,7 +486,7 @@ const toAuditGridItem = (
   return {
     key: permissionItem.key,
     permissionItem,
-    groupName: permissionItem.displayName,
+    groupName: getDisplayName(permissionItem),
     principalType: getPrincipalTypeLabel(permissionItem, associatedGroupIds),
     permissionLevels: permissionLevelsText,
     groupPath: getGroupPath(permissionItem),
@@ -501,7 +511,7 @@ const flattenPermissionItems = (
 }, []);
 
 const isGroupNode = (permissionItem: IPermissionAuditItem): boolean =>
-  permissionItem.principalType !== 'User' || !!permissionItem.children?.length;
+  (permissionItem.principalType !== 'User' && permissionItem.principalType !== 'LoadMore') || !!permissionItem.children?.length;
 
 const toGroupHeaderName = (
   permissionItem: IPermissionAuditItem,
@@ -643,6 +653,26 @@ const projectAuditResult = (
     items: flattenPermissionItems(auditResult.groups, auditResult.associatedGroupIds)
   };
 
+const replacePermissionItem = (
+  permissionItems: IPermissionAuditItem[],
+  itemKey: string,
+  replacementItems: IPermissionAuditItem[]
+): IPermissionAuditItem[] => permissionItems.reduce((nextItems: IPermissionAuditItem[], permissionItem) => {
+  if (permissionItem.key === itemKey) {
+    nextItems.push(...replacementItems);
+    return nextItems;
+  }
+
+  nextItems.push({
+    ...permissionItem,
+    children: permissionItem.children
+      ? replacePermissionItem(permissionItem.children, itemKey, replacementItems)
+      : permissionItem.children
+  });
+
+  return nextItems;
+}, []);
+
 const toCsvValue = (value: unknown): string => {
   const stringValue: string = toDisplayText(value);
 
@@ -764,6 +794,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
   const [isAuditLoading, setIsAuditLoading] = React.useState<boolean>(false);
   const [isPrincipalSearchLoading, setIsPrincipalSearchLoading] = React.useState<boolean>(false);
   const [isGroupedView, setIsGroupedView] = React.useState<boolean>(() => readGroupedViewPreference(props.groupedViewPreferenceKey));
+  const loadDeferredGroupMembersRef = React.useRef<(item: IPermissionAuditItem) => void>(() => undefined);
   const detailsPanelHeightPreferenceKey: string = React.useMemo(
     () => `${props.groupedViewPreferenceKey}:GridHeight`,
     [props.groupedViewPreferenceKey]
@@ -795,7 +826,14 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     selectionRef.current = new Selection({
       onSelectionChanged: () => {
         const selectedItems: IAuditGridItem[] = selectionRef.current?.getSelection() as IAuditGridItem[];
-        setSelectedDetailsHtml(selectedItems[0]?.detailsHtml || '');
+        const selectedItem: IAuditGridItem | undefined = selectedItems[0];
+
+        if (selectedItem?.permissionItem.principalType === 'LoadMore') {
+          loadDeferredGroupMembersRef.current(selectedItem.permissionItem);
+          return;
+        }
+
+        setSelectedDetailsHtml(selectedItem?.detailsHtml || '');
       }
     });
   }
@@ -828,6 +866,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
       if (shouldIncludeListsWithUniquePermissions || shouldIncludeListItemsWithUniquePermissions) {
         const auditOptions: ISharePointPermissionAuditOptions = {
           expandGroups: shouldExpandGroups,
+          groupExpansionBatchSize: props.groupExpansionBatchSize,
           includeHiddenListsWithUniquePermissions: shouldIncludeHiddenListsWithUniquePermissions,
           includeListItemsWithUniquePermissions: shouldIncludeListItemsWithUniquePermissions,
           includeListsWithUniquePermissions: shouldIncludeListsWithUniquePermissions,
@@ -839,11 +878,11 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
         setAuditProjection(auditResult);
       } else if (selectedOptionKeys.length === 0) {
         const siteGroupsResult: ICurrentSitePermissionGroupsResult =
-          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync();
+          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(false, props.groupExpansionBatchSize);
         setAuditProjection(siteGroupsResult);
       } else if (shouldExpandGroups) {
         const siteGroupsResult: ICurrentSitePermissionGroupsResult =
-          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(true);
+          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(true, props.groupExpansionBatchSize);
         setAuditProjection(siteGroupsResult);
       }
     } catch (error) {
@@ -855,7 +894,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
         setIsAuditLoading(false);
       }
     }
-  }, [isGroupedView, props.sharePointPermissionAuditService, selectedOptionKeys]);
+  }, [isGroupedView, props.groupExpansionBatchSize, props.sharePointPermissionAuditService, selectedOptionKeys]);
 
   React.useEffect(() => {
     if (!isSharePointReady) {
@@ -917,6 +956,33 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     downloadCsv(buildCsvContent(auditResult));
   }, [auditResult]);
 
+  const onLoadDeferredGroupMembers = React.useCallback((loadMoreItem: IPermissionAuditItem): void => {
+    if (!auditResult) {
+      return;
+    }
+
+    setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditLoadingLabel)}</p>`);
+
+    props.sharePointPermissionAuditService.loadDeferredGroupMembersAsync(loadMoreItem)
+      .then((loadedItems) => {
+        const nextAuditResult: ICurrentSitePermissionGroupsResult = {
+          ...auditResult,
+          groups: replacePermissionItem(auditResult.groups, loadMoreItem.key, loadedItems)
+        };
+        const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
+
+        setAuditResult(nextAuditResult);
+        setAuditGroups(projection.groups);
+        setAuditItems(projection.items);
+        setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditLoadRemainingGroupMembersDetails)}</p>`);
+      })
+      .catch((error) => {
+        setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+      });
+  }, [auditResult, isGroupedView, props.sharePointPermissionAuditService]);
+
+  loadDeferredGroupMembersRef.current = onLoadDeferredGroupMembers;
+
   const onResolvePrincipalSuggestions = React.useCallback(async (
     filterText: string,
     currentSuggestions?: IPersonaProps[]
@@ -956,6 +1022,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditLoadingLabel)}</p>`);
 
     props.sharePointPermissionAuditService.searchPrincipalAccessAsync({
+      groupExpansionBatchSize: props.groupExpansionBatchSize,
       principal: selectedPrincipal.directoryPerson,
       includeHiddenListsWithUniquePermissions: selectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1
     }).then((searchResult) => {
@@ -982,7 +1049,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
         setIsPrincipalSearchLoading(false);
       }
     });
-  }, [props.sharePointPermissionAuditService, selectedOptionKeys, selectedPrincipalSuggestions]);
+  }, [props.groupExpansionBatchSize, props.sharePointPermissionAuditService, selectedOptionKeys, selectedPrincipalSuggestions]);
 
   const onRenderGroupHeader = React.useCallback((
     groupHeaderProps?: IGroupHeaderProps,
@@ -1173,6 +1240,14 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
                 ariaLabelForGrid={strings.AuditResultsGridAriaLabel}
               />
             </ScrollablePane>
+            {isLoading && auditItems.length === 0 && (
+              <div className={styles.gridLoadingOverlay}>
+                <Spinner
+                  label={strings.AuditLoadingLabel}
+                  size={SpinnerSize.large}
+                />
+              </div>
+            )}
           </div>
         </div>
 

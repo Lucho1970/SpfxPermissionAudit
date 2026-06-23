@@ -18,6 +18,7 @@ export interface IPrincipalAccessMatch {
 }
 
 export interface IPrincipalAccessSearchRequest {
+  groupExpansionBatchSize?: number;
   principal: IDirectoryPersonInfo;
   includeHiddenListsWithUniquePermissions?: boolean;
 }
@@ -31,6 +32,7 @@ export interface IPrincipalAccessSearchResult {
 export type PermissionAuditProgressHandler = (result: ICurrentSitePermissionGroupsResult) => void;
 
 export interface ISharePointPermissionAuditOptions {
+  groupExpansionBatchSize?: number;
   expandGroups?: boolean;
   includeHiddenListsWithUniquePermissions?: boolean;
   includeListItemsWithUniquePermissions?: boolean;
@@ -40,7 +42,8 @@ export interface ISharePointPermissionAuditOptions {
 
 export interface ISharePointPermissionAuditService {
   getCurrentSitePermissionGroupsAsync(): Promise<IPermissionAuditItem[]>;
-  getCurrentSitePermissionGroupsWithMetadataAsync(expandGroups?: boolean): Promise<ICurrentSitePermissionGroupsResult>;
+  getCurrentSitePermissionGroupsWithMetadataAsync(expandGroups?: boolean, groupExpansionBatchSize?: number): Promise<ICurrentSitePermissionGroupsResult>;
   getPermissionAuditAsync(options: ISharePointPermissionAuditOptions): Promise<ICurrentSitePermissionGroupsResult>;
+  loadDeferredGroupMembersAsync(loadMoreItem: IPermissionAuditItem): Promise<IPermissionAuditItem[]>;
   searchPrincipalAccessAsync(request: IPrincipalAccessSearchRequest): Promise<IPrincipalAccessSearchResult>;
 }

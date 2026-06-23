@@ -9,6 +9,7 @@ export default class PermissionAudit extends React.Component<IPermissionAuditPro
       <section className={`${styles.permissionAudit} ${this.props.hasTeamsContext ? styles.teams : ''}`}>
         <AuditPage
           graphPermissionAuditService={this.props.graphPermissionAuditService}
+          groupExpansionBatchSize={this.props.groupExpansionBatchSize}
           groupedViewPreferenceKey={this.props.groupedViewPreferenceKey}
           sharePointPermissionAuditService={this.props.sharePointPermissionAuditService}
         />

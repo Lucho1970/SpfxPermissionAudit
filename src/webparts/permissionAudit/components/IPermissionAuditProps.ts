@@ -7,6 +7,7 @@ export interface IPermissionAuditProps {
   hasTeamsContext: boolean;
   userDisplayName: string;
   graphPermissionAuditService: IGraphPermissionAuditService;
+  groupExpansionBatchSize: number;
   groupedViewPreferenceKey: string;
   sharePointPermissionAuditService: ISharePointPermissionAuditService;
 }

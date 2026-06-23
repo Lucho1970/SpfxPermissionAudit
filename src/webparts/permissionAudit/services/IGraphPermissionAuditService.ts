@@ -10,6 +10,7 @@ export interface IDirectoryPersonInfo {
 }
 
 export interface IGraphGroupExpansionRequest {
+  batchSize?: number;
   groupDisplayName: string;
   groupAadObjectId?: string;
   groupLoginName?: string;
@@ -21,5 +22,6 @@ export interface IGraphGroupExpansionRequest {
 
 export interface IGraphPermissionAuditService {
   expandGroupMembersAsync(request: IGraphGroupExpansionRequest): Promise<IPermissionAuditItem[]>;
+  loadDeferredGroupMembersAsync(loadMoreItem: IPermissionAuditItem): Promise<IPermissionAuditItem[]>;
   searchPeopleAsync(searchText: string): Promise<IDirectoryPersonInfo[]>;
 }

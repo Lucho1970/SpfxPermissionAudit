@@ -2,6 +2,7 @@ import type { IGraphPermissionAuditService, ISharePointPermissionAuditService } 
 
 export interface IAuditPageProps {
   graphPermissionAuditService: IGraphPermissionAuditService;
+  groupExpansionBatchSize: number;
   groupedViewPreferenceKey: string;
   sharePointPermissionAuditService: ISharePointPermissionAuditService;
 }
