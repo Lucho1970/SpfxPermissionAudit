@@ -41,8 +41,10 @@ export interface ISharePointPermissionAuditOptions {
 }
 
 export interface ISharePointPermissionAuditService {
+  expandPermissionAuditGroupsAsync(groups: IPermissionAuditItem[], groupExpansionBatchSize?: number): Promise<IPermissionAuditItem[]>;
   getCurrentSitePermissionGroupsAsync(): Promise<IPermissionAuditItem[]>;
   getCurrentSitePermissionGroupsWithMetadataAsync(expandGroups?: boolean, groupExpansionBatchSize?: number): Promise<ICurrentSitePermissionGroupsResult>;
+  getListPermissionAuditItemsAsync(options: ISharePointPermissionAuditOptions): Promise<IPermissionAuditItem[]>;
   getPermissionAuditAsync(options: ISharePointPermissionAuditOptions): Promise<ICurrentSitePermissionGroupsResult>;
   loadDeferredGroupMembersAsync(loadMoreItem: IPermissionAuditItem): Promise<IPermissionAuditItem[]>;
   searchPrincipalAccessAsync(request: IPrincipalAccessSearchRequest): Promise<IPrincipalAccessSearchResult>;

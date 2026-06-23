@@ -17,8 +17,7 @@ import type { IPermissionAuditItem, IPermissionAuditLevel } from '../models';
 import type {
   IAssociatedSharePointGroupIds,
   ICurrentSitePermissionGroupsResult,
-  IPrincipalAccessSearchResult,
-  ISharePointPermissionAuditOptions
+  IPrincipalAccessSearchResult
 } from '../services';
 import type { IDirectoryPersonInfo } from '../services';
 import styles from './AuditPage.module.scss';
@@ -49,6 +48,19 @@ interface IAuditGroupData {
 
 interface IPrincipalSuggestionPersona extends IPersonaProps {
   directoryPerson: IDirectoryPersonInfo;
+}
+
+interface ILoadedListLayer {
+  expandedNodes?: IPermissionAuditItem[];
+  includeHidden: boolean;
+  nodes: IPermissionAuditItem[];
+}
+
+interface IAuditDataCache {
+  baseResult?: ICurrentSitePermissionGroupsResult;
+  expandedBaseResult?: ICurrentSitePermissionGroupsResult;
+  listItemsLayer?: ILoadedListLayer;
+  listPermissionsLayer?: ILoadedListLayer;
 }
 
 const auditOptions: ICheckboxListOption[] = [
@@ -673,6 +685,129 @@ const replacePermissionItem = (
   return nextItems;
 }, []);
 
+const replacePermissionItemInResult = (
+  auditResult: ICurrentSitePermissionGroupsResult | undefined,
+  itemKey: string,
+  replacementItems: IPermissionAuditItem[]
+): ICurrentSitePermissionGroupsResult | undefined => auditResult
+  ? {
+    ...auditResult,
+    groups: replacePermissionItem(auditResult.groups, itemKey, replacementItems)
+  }
+  : auditResult;
+
+const replacePermissionItemInLayer = (
+  listLayer: ILoadedListLayer | undefined,
+  itemKey: string,
+  replacementItems: IPermissionAuditItem[]
+): ILoadedListLayer | undefined => listLayer
+  ? {
+    ...listLayer,
+    expandedNodes: listLayer.expandedNodes
+      ? replacePermissionItem(listLayer.expandedNodes, itemKey, replacementItems)
+      : listLayer.expandedNodes,
+    nodes: replacePermissionItem(listLayer.nodes, itemKey, replacementItems)
+  }
+  : listLayer;
+
+const replacePermissionItemInCache = (
+  cache: IAuditDataCache,
+  itemKey: string,
+  replacementItems: IPermissionAuditItem[]
+): IAuditDataCache => ({
+  ...cache,
+  baseResult: replacePermissionItemInResult(cache.baseResult, itemKey, replacementItems),
+  expandedBaseResult: replacePermissionItemInResult(cache.expandedBaseResult, itemKey, replacementItems),
+  listItemsLayer: replacePermissionItemInLayer(cache.listItemsLayer, itemKey, replacementItems),
+  listPermissionsLayer: replacePermissionItemInLayer(cache.listPermissionsLayer, itemKey, replacementItems)
+});
+
+const filterListNodesByHiddenOption = (
+  listNodes: IPermissionAuditItem[] | undefined,
+  includeHiddenLists: boolean
+): IPermissionAuditItem[] => (listNodes || []).filter((listNode) =>
+  includeHiddenLists || !listNode.objectDetails?.hidden
+);
+
+const getListLayerNodes = (
+  listLayer: ILoadedListLayer | undefined,
+  includeHiddenLists: boolean,
+  includeExpandedGroups: boolean
+): IPermissionAuditItem[] => filterListNodesByHiddenOption(
+  includeExpandedGroups && listLayer?.expandedNodes ? listLayer.expandedNodes : listLayer?.nodes,
+  includeHiddenLists
+);
+
+const mergeListLayerNodes = (
+  listPermissionNodes: IPermissionAuditItem[],
+  listItemNodes: IPermissionAuditItem[]
+): IPermissionAuditItem[] => {
+  const listNodeByKey: Map<string, IPermissionAuditItem> = new Map<string, IPermissionAuditItem>();
+
+  listPermissionNodes.forEach((listNode) => {
+    listNodeByKey.set(listNode.key, {
+      ...listNode,
+      children: [...(listNode.children || [])]
+    });
+  });
+
+  listItemNodes.forEach((listNode) => {
+    const existingListNode: IPermissionAuditItem | undefined = listNodeByKey.get(listNode.key);
+
+    if (!existingListNode) {
+      listNodeByKey.set(listNode.key, {
+        ...listNode,
+        children: [...(listNode.children || [])]
+      });
+      return;
+    }
+
+    existingListNode.children = [
+      ...(existingListNode.children || []),
+      ...(listNode.children || []).filter((child) => child.principalType === 'ListItem')
+    ];
+  });
+
+  return Array.from(listNodeByKey.values());
+};
+
+const composeAuditResultFromCache = (
+  cache: IAuditDataCache,
+  selectedOptionKeys: string[]
+): ICurrentSitePermissionGroupsResult | undefined => {
+  const includeExpandedGroups: boolean = selectedOptionKeys.indexOf('ExpandGroups') > -1;
+  const includeListsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListsWithUniquePermissions') > -1;
+  const includeListItemsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListItemsWithUniquePermissions') > -1;
+  const includeHiddenLists: boolean = selectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1;
+  const baseResult: ICurrentSitePermissionGroupsResult | undefined = includeExpandedGroups && cache.expandedBaseResult
+    ? cache.expandedBaseResult
+    : cache.baseResult;
+  const siteNode: IPermissionAuditItem | undefined = baseResult?.groups[0];
+
+  if (!baseResult || !siteNode) {
+    return undefined;
+  }
+
+  const listPermissionNodes: IPermissionAuditItem[] = includeListsWithUniquePermissions
+    ? getListLayerNodes(cache.listPermissionsLayer, includeHiddenLists, includeExpandedGroups)
+    : [];
+  const listItemNodes: IPermissionAuditItem[] = includeListItemsWithUniquePermissions
+    ? getListLayerNodes(cache.listItemsLayer, includeHiddenLists, includeExpandedGroups)
+    : [];
+  const mergedListNodes: IPermissionAuditItem[] = mergeListLayerNodes(listPermissionNodes, listItemNodes);
+
+  return {
+    associatedGroupIds: baseResult.associatedGroupIds,
+    groups: [{
+      ...siteNode,
+      children: [
+        ...(siteNode.children || []),
+        ...mergedListNodes
+      ]
+    }]
+  };
+};
+
 const toCsvValue = (value: unknown): string => {
   const stringValue: string = toDisplayText(value);
 
@@ -789,6 +924,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
   const [auditGroups, setAuditGroups] = React.useState<IGroup[] | undefined>(undefined);
   const [auditItems, setAuditItems] = React.useState<IAuditGridItem[]>([]);
   const [auditResult, setAuditResult] = React.useState<ICurrentSitePermissionGroupsResult | undefined>(undefined);
+  const [auditCache, setAuditCache] = React.useState<IAuditDataCache>({});
   const [selectedDetailsHtml, setSelectedDetailsHtml] = React.useState<string>('');
   const [selectedPrincipalSuggestions, setSelectedPrincipalSuggestions] = React.useState<IPrincipalSuggestionPersona[]>([]);
   const [isAuditLoading, setIsAuditLoading] = React.useState<boolean>(false);
@@ -838,53 +974,156 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     });
   }
 
-  const onStartAudit = React.useCallback(async (requestId: number): Promise<void> => {
-    const setAuditProjection = (nextAuditResult: ICurrentSitePermissionGroupsResult): void => {
+  const applyAuditCacheProjection = React.useCallback((nextCache: IAuditDataCache, nextSelectedOptionKeys: string[]): void => {
+    const nextAuditResult: ICurrentSitePermissionGroupsResult | undefined =
+      composeAuditResultFromCache(nextCache, nextSelectedOptionKeys);
+
+    if (!nextAuditResult) {
+      setAuditResult(undefined);
+      setAuditGroups(undefined);
+      setAuditItems([]);
+      return;
+    }
+
+    const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
+
+    setAuditResult(nextAuditResult);
+    setAuditGroups(projection.groups);
+    setAuditItems(projection.items);
+  }, [isGroupedView]);
+
+  const loadMissingAuditLayers = React.useCallback(async (requestId: number, nextSelectedOptionKeys: string[]): Promise<void> => {
+    const shouldExpandGroups: boolean = nextSelectedOptionKeys.indexOf('ExpandGroups') > -1;
+    const shouldIncludeListsWithUniquePermissions: boolean = nextSelectedOptionKeys.indexOf('IncludeListsWithUniquePermissions') > -1;
+    const shouldIncludeHiddenListsWithUniquePermissions: boolean = nextSelectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1;
+    const shouldIncludeListItemsWithUniquePermissions: boolean = nextSelectedOptionKeys.indexOf('IncludeListItemsWithUniquePermissions') > -1;
+
+    setIsAuditLoading(true);
+
+    try {
+      let nextCache: IAuditDataCache = auditCache;
+
+      if (!nextCache.baseResult) {
+        const baseResult: ICurrentSitePermissionGroupsResult =
+          await props.sharePointPermissionAuditService.getPermissionAuditAsync({
+            expandGroups: false,
+            groupExpansionBatchSize: props.groupExpansionBatchSize
+          });
+
+        nextCache = {
+          ...nextCache,
+          baseResult
+        };
+      }
+
+      if (shouldExpandGroups && !nextCache.expandedBaseResult) {
+        const siteNode: IPermissionAuditItem | undefined = nextCache.baseResult?.groups[0];
+        const expandedChildren: IPermissionAuditItem[] =
+          await props.sharePointPermissionAuditService.expandPermissionAuditGroupsAsync(
+            siteNode?.children || [],
+            props.groupExpansionBatchSize
+          );
+
+        nextCache = {
+          ...nextCache,
+          expandedBaseResult: nextCache.baseResult && siteNode ? {
+            associatedGroupIds: nextCache.baseResult.associatedGroupIds,
+            groups: [{
+              ...siteNode,
+              children: expandedChildren
+            }]
+          } : undefined
+        };
+      }
+
+      if (
+        shouldIncludeListsWithUniquePermissions &&
+        (!nextCache.listPermissionsLayer || (shouldIncludeHiddenListsWithUniquePermissions && !nextCache.listPermissionsLayer.includeHidden))
+      ) {
+        const listPermissionNodes: IPermissionAuditItem[] =
+          await props.sharePointPermissionAuditService.getListPermissionAuditItemsAsync({
+            expandGroups: false,
+            groupExpansionBatchSize: props.groupExpansionBatchSize,
+            includeHiddenListsWithUniquePermissions: shouldIncludeHiddenListsWithUniquePermissions,
+            includeListsWithUniquePermissions: true
+          });
+
+        nextCache = {
+          ...nextCache,
+          listPermissionsLayer: {
+            includeHidden: shouldIncludeHiddenListsWithUniquePermissions,
+            nodes: listPermissionNodes
+          }
+        };
+      }
+
+      if (
+        shouldExpandGroups &&
+        nextCache.listPermissionsLayer &&
+        !nextCache.listPermissionsLayer.expandedNodes
+      ) {
+        const expandedListPermissionNodes: IPermissionAuditItem[] =
+          await props.sharePointPermissionAuditService.expandPermissionAuditGroupsAsync(
+            nextCache.listPermissionsLayer.nodes,
+            props.groupExpansionBatchSize
+          );
+
+        nextCache = {
+          ...nextCache,
+          listPermissionsLayer: {
+            ...nextCache.listPermissionsLayer,
+            expandedNodes: expandedListPermissionNodes
+          }
+        };
+      }
+
+      if (
+        shouldIncludeListItemsWithUniquePermissions &&
+        (!nextCache.listItemsLayer || (shouldIncludeHiddenListsWithUniquePermissions && !nextCache.listItemsLayer.includeHidden))
+      ) {
+        const listItemNodes: IPermissionAuditItem[] =
+          await props.sharePointPermissionAuditService.getListPermissionAuditItemsAsync({
+            expandGroups: false,
+            groupExpansionBatchSize: props.groupExpansionBatchSize,
+            includeHiddenListsWithUniquePermissions: shouldIncludeHiddenListsWithUniquePermissions,
+            includeListItemsWithUniquePermissions: true
+          });
+
+        nextCache = {
+          ...nextCache,
+          listItemsLayer: {
+            includeHidden: shouldIncludeHiddenListsWithUniquePermissions,
+            nodes: listItemNodes
+          }
+        };
+      }
+
+      if (
+        shouldExpandGroups &&
+        nextCache.listItemsLayer &&
+        !nextCache.listItemsLayer.expandedNodes
+      ) {
+        const expandedListItemNodes: IPermissionAuditItem[] =
+          await props.sharePointPermissionAuditService.expandPermissionAuditGroupsAsync(
+            nextCache.listItemsLayer.nodes,
+            props.groupExpansionBatchSize
+          );
+
+        nextCache = {
+          ...nextCache,
+          listItemsLayer: {
+            ...nextCache.listItemsLayer,
+            expandedNodes: expandedListItemNodes
+          }
+        };
+      }
+
       if (latestAuditRequestIdRef.current !== requestId) {
         return;
       }
 
-      const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
-
-      setAuditResult(nextAuditResult);
-      setAuditGroups(projection.groups);
-      setAuditItems(projection.items);
-    };
-
-    setIsAuditLoading(true);
-    setAuditResult(undefined);
-    setAuditGroups(undefined);
-    setAuditItems([]);
-    setSelectedDetailsHtml('');
-
-    try {
-      const shouldExpandGroups: boolean = selectedOptionKeys.indexOf('ExpandGroups') > -1;
-      const shouldIncludeListsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListsWithUniquePermissions') > -1;
-      const shouldIncludeHiddenListsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeHiddenListsWithUniquePermissions') > -1;
-      const shouldIncludeListItemsWithUniquePermissions: boolean = selectedOptionKeys.indexOf('IncludeListItemsWithUniquePermissions') > -1;
-
-      if (shouldIncludeListsWithUniquePermissions || shouldIncludeListItemsWithUniquePermissions) {
-        const auditOptions: ISharePointPermissionAuditOptions = {
-          expandGroups: shouldExpandGroups,
-          groupExpansionBatchSize: props.groupExpansionBatchSize,
-          includeHiddenListsWithUniquePermissions: shouldIncludeHiddenListsWithUniquePermissions,
-          includeListItemsWithUniquePermissions: shouldIncludeListItemsWithUniquePermissions,
-          includeListsWithUniquePermissions: shouldIncludeListsWithUniquePermissions,
-          onAuditUpdated: setAuditProjection
-        };
-        const auditResult: ICurrentSitePermissionGroupsResult =
-          await props.sharePointPermissionAuditService.getPermissionAuditAsync(auditOptions);
-
-        setAuditProjection(auditResult);
-      } else if (selectedOptionKeys.length === 0) {
-        const siteGroupsResult: ICurrentSitePermissionGroupsResult =
-          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(false, props.groupExpansionBatchSize);
-        setAuditProjection(siteGroupsResult);
-      } else if (shouldExpandGroups) {
-        const siteGroupsResult: ICurrentSitePermissionGroupsResult =
-          await props.sharePointPermissionAuditService.getCurrentSitePermissionGroupsWithMetadataAsync(true, props.groupExpansionBatchSize);
-        setAuditProjection(siteGroupsResult);
-      }
+      setAuditCache(nextCache);
+      applyAuditCacheProjection(nextCache, nextSelectedOptionKeys);
     } catch (error) {
       if (latestAuditRequestIdRef.current === requestId) {
         setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
@@ -894,7 +1133,12 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
         setIsAuditLoading(false);
       }
     }
-  }, [isGroupedView, props.groupExpansionBatchSize, props.sharePointPermissionAuditService, selectedOptionKeys]);
+  }, [
+    applyAuditCacheProjection,
+    auditCache,
+    props.groupExpansionBatchSize,
+    props.sharePointPermissionAuditService
+  ]);
 
   React.useEffect(() => {
     if (!isSharePointReady) {
@@ -905,7 +1149,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     latestAuditRequestIdRef.current = requestId;
 
     const timeoutHandle: number = window.setTimeout(() => {
-      onStartAudit(requestId).catch((error) => {
+      loadMissingAuditLayers(requestId, selectedOptionKeys).catch((error) => {
         if (latestAuditRequestIdRef.current === requestId) {
           setIsAuditLoading(false);
           setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
@@ -916,7 +1160,7 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     return () => {
       window.clearTimeout(timeoutHandle);
     };
-  }, [isSharePointReady, onStartAudit]);
+  }, [isSharePointReady, loadMissingAuditLayers, selectedOptionKeys]);
 
   React.useEffect(() => {
     setAuditGridHeight(readPanelHeightPreference(detailsPanelHeightPreferenceKey));
@@ -965,12 +1209,16 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
 
     props.sharePointPermissionAuditService.loadDeferredGroupMembersAsync(loadMoreItem)
       .then((loadedItems) => {
-        const nextAuditResult: ICurrentSitePermissionGroupsResult = {
-          ...auditResult,
-          groups: replacePermissionItem(auditResult.groups, loadMoreItem.key, loadedItems)
-        };
+        const nextAuditResult: ICurrentSitePermissionGroupsResult | undefined =
+          replacePermissionItemInResult(auditResult, loadMoreItem.key, loadedItems);
+
+        if (!nextAuditResult) {
+          return;
+        }
+
         const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
 
+        setAuditCache((currentCache) => replacePermissionItemInCache(currentCache, loadMoreItem.key, loadedItems));
         setAuditResult(nextAuditResult);
         setAuditGroups(projection.groups);
         setAuditItems(projection.items);

@@ -155,6 +155,15 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     return result.groups;
   }
 
+  public async expandPermissionAuditGroupsAsync(
+    groups: IPermissionAuditItem[],
+    groupExpansionBatchSize?: number
+  ): Promise<IPermissionAuditItem[]> {
+    const normalizedBatchSize: number = this._normalizeGroupExpansionBatchSize(groupExpansionBatchSize);
+
+    return Promise.all(groups.map((group) => this._expandPermissionAuditGroupTreeAsync(group, normalizedBatchSize)));
+  }
+
   public async getCurrentSitePermissionGroupsWithMetadataAsync(
     expandGroups?: boolean,
     groupExpansionBatchSize?: number
@@ -247,46 +256,49 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     };
 
     if (options.includeListsWithUniquePermissions || options.includeListItemsWithUniquePermissions) {
-      const lists: ISharePointListInfo[] = await this._getListsForPermissionAuditAsync(options);
-      const displayedListNodeById: Map<string, IPermissionAuditItem> = new Map<string, IPermissionAuditItem>();
-      const listNodes: IPermissionAuditItem[] = options.includeListsWithUniquePermissions
-        ? await Promise.all(lists
-          .filter((list) => list.HasUniqueRoleAssignments)
-          .map((list) => this._toListAuditItemAsync(list, options, true)))
-        : [];
-
-      listNodes.forEach((listNode) => {
-        displayedListNodeById.set(listNode.key.replace(/^list-/, ''), listNode);
-      });
-
+      const listNodes: IPermissionAuditItem[] = await this.getListPermissionAuditItemsAsync(options);
       siteNode.children = [...(siteNode.children || []), ...listNodes];
       options.onAuditUpdated?.(result);
-
-      if (options.includeListItemsWithUniquePermissions) {
-        await Promise.all(lists.map(async (list) => {
-          let listNode: IPermissionAuditItem | undefined = displayedListNodeById.get(list.Id);
-
-          if (!listNode) {
-            listNode = this._toListContainerAuditItem(list);
-          }
-
-          const listItems: IPermissionAuditItem[] = await this._getListItemsWithUniquePermissionsAsync(listNode, options);
-
-          if (listItems.length > 0) {
-            listNode.children = [...(listNode.children || []), ...listItems];
-
-            if (!displayedListNodeById.has(list.Id)) {
-              displayedListNodeById.set(list.Id, listNode);
-              siteNode.children = [...(siteNode.children || []), listNode];
-            }
-
-            options.onAuditUpdated?.(result);
-          }
-        }));
-      }
     }
 
     return result;
+  }
+
+  public async getListPermissionAuditItemsAsync(options: ISharePointPermissionAuditOptions): Promise<IPermissionAuditItem[]> {
+    const lists: ISharePointListInfo[] = await this._getListsForPermissionAuditAsync(options);
+    const displayedListNodeById: Map<string, IPermissionAuditItem> = new Map<string, IPermissionAuditItem>();
+    const listNodes: IPermissionAuditItem[] = options.includeListsWithUniquePermissions
+      ? await Promise.all(lists
+        .filter((list) => list.HasUniqueRoleAssignments)
+        .map((list) => this._toListAuditItemAsync(list, options, true)))
+      : [];
+
+    listNodes.forEach((listNode) => {
+      displayedListNodeById.set(listNode.key.replace(/^list-/, ''), listNode);
+    });
+
+    if (options.includeListItemsWithUniquePermissions) {
+      await Promise.all(lists.map(async (list) => {
+        let listNode: IPermissionAuditItem | undefined = displayedListNodeById.get(list.Id);
+
+        if (!listNode) {
+          listNode = this._toListContainerAuditItem(list);
+        }
+
+        const listItems: IPermissionAuditItem[] = await this._getListItemsWithUniquePermissionsAsync(listNode, options);
+
+        if (listItems.length > 0) {
+          listNode.children = [...(listNode.children || []), ...listItems];
+
+          if (!displayedListNodeById.has(list.Id)) {
+            displayedListNodeById.set(list.Id, listNode);
+            listNodes.push(listNode);
+          }
+        }
+      }));
+    }
+
+    return listNodes;
   }
 
   public async searchPrincipalAccessAsync(request: IPrincipalAccessSearchRequest): Promise<IPrincipalAccessSearchResult> {
@@ -646,6 +658,51 @@ export class SharePointPermissionAuditService implements ISharePointPermissionAu
     }
 
     return baseItem;
+  }
+
+  private async _expandPermissionAuditGroupTreeAsync(
+    permissionItem: IPermissionAuditItem,
+    groupExpansionBatchSize: number
+  ): Promise<IPermissionAuditItem> {
+    if (permissionItem.principalType === 'SharePointGroup' && permissionItem.principalId && !permissionItem.children?.length) {
+      return this._withExpandedPermissionItemGroupAsync(
+        permissionItem,
+        new Set<string>([permissionItem.key, permissionItem.principalId.toString()]),
+        groupExpansionBatchSize
+      );
+    }
+
+    if (
+      (permissionItem.principalType === 'SecurityGroup' || permissionItem.principalType === 'DistributionList') &&
+      !permissionItem.children?.length
+    ) {
+      const children: IPermissionAuditItem[] = await this._graphPermissionAuditService.expandGroupMembersAsync({
+        batchSize: groupExpansionBatchSize,
+        groupAadObjectId: permissionItem.groupDetails?.aadObjectId || this._extractAadObjectIdFromLoginName(permissionItem.loginName),
+        groupDisplayName: permissionItem.displayName,
+        groupLoginName: permissionItem.loginName,
+        inheritedPermissionLevels: permissionItem.permissionLevels,
+        parentKey: permissionItem.key,
+        parentPath: permissionItem.path,
+        depth: permissionItem.depth + 1
+      });
+
+      return {
+        ...permissionItem,
+        children
+      };
+    }
+
+    if (!permissionItem.children?.length) {
+      return permissionItem;
+    }
+
+    return {
+      ...permissionItem,
+      children: await Promise.all(permissionItem.children.map((child) =>
+        this._expandPermissionAuditGroupTreeAsync(child, groupExpansionBatchSize)
+      ))
+    };
   }
 
   private _toDeferredParentGroup(loadMoreItem: IPermissionAuditItem): IPermissionAuditItem {
