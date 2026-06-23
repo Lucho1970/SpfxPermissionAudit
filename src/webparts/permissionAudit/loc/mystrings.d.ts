@@ -56,11 +56,15 @@ declare interface IPermissionAuditWebPartStrings {
   AuditPrincipalTypeSite: string;
   AuditPrincipalTypeUnknown: string;
   AuditPrincipalTypeUser: string;
+  AuditExportLoadRemainingGroupMembersPrompt: string;
+  AuditExportLoadingRemainingGroupMembersLabel: string;
   AuditUserCountSingular: string;
   AuditUserCountPlural: string;
   AuditDirectPermissionsGroupLabel: string;
   AuditLoadRemainingGroupMembersLabel: string;
   AuditLoadRemainingGroupMembersDetails: string;
+  AuditRemainingGroupMembersNotLoadedLabel: string;
+  AuditRemainingGroupMembersNotLoadedDetails: string;
   AuditGroupNoDirectPermissions: string;
   AuditGroupYes: string;
   AuditGroupNo: string;

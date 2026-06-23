@@ -722,6 +722,113 @@ const replacePermissionItemInCache = (
   listPermissionsLayer: replacePermissionItemInLayer(cache.listPermissionsLayer, itemKey, replacementItems)
 });
 
+const findDeferredGroupMemberItems = (permissionItems: IPermissionAuditItem[]): IPermissionAuditItem[] =>
+  permissionItems.reduce((items: IPermissionAuditItem[], permissionItem) => {
+    if (permissionItem.sourceType === 'DeferredGroupMembers' && permissionItem.deferredGroupMembersDetails) {
+      items.push(permissionItem);
+    }
+
+    if (permissionItem.children?.length) {
+      items.push(...findDeferredGroupMemberItems(permissionItem.children));
+    }
+
+    return items;
+  }, []);
+
+const toUnloadedDeferredGroupMembersItem = (permissionItem: IPermissionAuditItem): IPermissionAuditItem => {
+  const path: string[] = permissionItem.path.length
+    ? [
+      ...permissionItem.path.slice(0, -1),
+      strings.AuditRemainingGroupMembersNotLoadedLabel
+    ]
+    : [strings.AuditRemainingGroupMembersNotLoadedLabel];
+
+  return {
+    ...permissionItem,
+    key: `${permissionItem.key}|not-loaded`,
+    displayName: strings.AuditRemainingGroupMembersNotLoadedLabel,
+    principalType: 'Unknown',
+    description: strings.AuditRemainingGroupMembersNotLoadedDetails,
+    path,
+    deferredGroupMembersDetails: undefined,
+    children: []
+  };
+};
+
+const replaceDeferredGroupMemberItems = (permissionItems: IPermissionAuditItem[]): IPermissionAuditItem[] =>
+  permissionItems.map((permissionItem) => {
+    if (permissionItem.sourceType === 'DeferredGroupMembers' && permissionItem.deferredGroupMembersDetails) {
+      return toUnloadedDeferredGroupMembersItem(permissionItem);
+    }
+
+    return {
+      ...permissionItem,
+      children: permissionItem.children?.length
+        ? replaceDeferredGroupMemberItems(permissionItem.children)
+        : permissionItem.children
+    };
+  });
+
+const replaceDeferredGroupMemberItemsInResult = (
+  auditResult: ICurrentSitePermissionGroupsResult
+): ICurrentSitePermissionGroupsResult => ({
+  ...auditResult,
+  groups: replaceDeferredGroupMemberItems(auditResult.groups)
+});
+
+const replaceDeferredGroupMemberItemsInLayer = (
+  listLayer: ILoadedListLayer | undefined
+): ILoadedListLayer | undefined => listLayer
+  ? {
+    ...listLayer,
+    expandedNodes: listLayer.expandedNodes
+      ? replaceDeferredGroupMemberItems(listLayer.expandedNodes)
+      : listLayer.expandedNodes,
+    nodes: replaceDeferredGroupMemberItems(listLayer.nodes)
+  }
+  : listLayer;
+
+const replaceDeferredGroupMemberItemsInCache = (cache: IAuditDataCache): IAuditDataCache => ({
+  ...cache,
+  baseResult: cache.baseResult
+    ? replaceDeferredGroupMemberItemsInResult(cache.baseResult)
+    : cache.baseResult,
+  expandedBaseResult: cache.expandedBaseResult
+    ? replaceDeferredGroupMemberItemsInResult(cache.expandedBaseResult)
+    : cache.expandedBaseResult,
+  listItemsLayer: replaceDeferredGroupMemberItemsInLayer(cache.listItemsLayer),
+  listPermissionsLayer: replaceDeferredGroupMemberItemsInLayer(cache.listPermissionsLayer)
+});
+
+const loadAllDeferredGroupMembersAsync = async (
+  initialAuditResult: ICurrentSitePermissionGroupsResult,
+  loadDeferredGroupMembersAsync: (loadMoreItem: IPermissionAuditItem) => Promise<IPermissionAuditItem[]>,
+  onDeferredGroupMembersLoaded: (
+    itemKey: string,
+    loadedItems: IPermissionAuditItem[],
+    nextAuditResult: ICurrentSitePermissionGroupsResult
+  ) => void
+): Promise<ICurrentSitePermissionGroupsResult> => {
+  let nextAuditResult: ICurrentSitePermissionGroupsResult = initialAuditResult;
+  let nextLoadMoreItem: IPermissionAuditItem | undefined = findDeferredGroupMemberItems(nextAuditResult.groups)[0];
+
+  while (nextLoadMoreItem) {
+    const loadedItems: IPermissionAuditItem[] = await loadDeferredGroupMembersAsync(nextLoadMoreItem);
+    const replacedAuditResult: ICurrentSitePermissionGroupsResult | undefined =
+      replacePermissionItemInResult(nextAuditResult, nextLoadMoreItem.key, loadedItems);
+
+    if (!replacedAuditResult) {
+      return nextAuditResult;
+    }
+
+    nextAuditResult = replacedAuditResult;
+    onDeferredGroupMembersLoaded(nextLoadMoreItem.key, loadedItems, nextAuditResult);
+    nextLoadMoreItem = findDeferredGroupMemberItems(nextAuditResult.groups)[0];
+  }
+
+  return nextAuditResult;
+};
+
 const filterListNodesByHiddenOption = (
   listNodes: IPermissionAuditItem[] | undefined,
   includeHiddenLists: boolean
@@ -1192,13 +1299,58 @@ export const AuditPage: React.FunctionComponent<IAuditPageProps> = (props) => {
     }
   }, [auditResult, props.groupedViewPreferenceKey]);
 
-  const onExportCsvClick = React.useCallback((): void => {
+  const onExportCsvClick = React.useCallback(async (): Promise<void> => {
     if (!auditResult) {
       return;
     }
 
-    downloadCsv(buildCsvContent(auditResult));
-  }, [auditResult]);
+    const deferredGroupMemberItems: IPermissionAuditItem[] = findDeferredGroupMemberItems(auditResult.groups);
+
+    if (!deferredGroupMemberItems.length) {
+      downloadCsv(buildCsvContent(auditResult));
+      return;
+    }
+
+    const shouldLoadRemainingMembers: boolean = window.confirm(strings.AuditExportLoadRemainingGroupMembersPrompt);
+
+    if (!shouldLoadRemainingMembers) {
+      const nextAuditResult: ICurrentSitePermissionGroupsResult = replaceDeferredGroupMemberItemsInResult(auditResult);
+      const projection: IAuditGridProjection = projectAuditResult(nextAuditResult, isGroupedView);
+
+      setAuditCache((currentCache) => replaceDeferredGroupMemberItemsInCache(currentCache));
+      setAuditResult(nextAuditResult);
+      setAuditGroups(projection.groups);
+      setAuditItems(projection.items);
+      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditRemainingGroupMembersNotLoadedDetails)}</p>`);
+      downloadCsv(buildCsvContent(nextAuditResult));
+      return;
+    }
+
+    setIsAuditLoading(true);
+    setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditExportLoadingRemainingGroupMembersLabel)}</p>`);
+
+    try {
+      const nextAuditResult: ICurrentSitePermissionGroupsResult = await loadAllDeferredGroupMembersAsync(
+        auditResult,
+        (loadMoreItem) => props.sharePointPermissionAuditService.loadDeferredGroupMembersAsync(loadMoreItem),
+        (itemKey, loadedItems, updatedAuditResult) => {
+          const projection: IAuditGridProjection = projectAuditResult(updatedAuditResult, isGroupedView);
+
+          setAuditCache((currentCache) => replacePermissionItemInCache(currentCache, itemKey, loadedItems));
+          setAuditResult(updatedAuditResult);
+          setAuditGroups(projection.groups);
+          setAuditItems(projection.items);
+        }
+      );
+
+      downloadCsv(buildCsvContent(nextAuditResult));
+      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditLoadRemainingGroupMembersDetails)}</p>`);
+    } catch (error) {
+      setSelectedDetailsHtml(`<p>${encodeHtml(strings.AuditGroupFetchError)}</p><p>${encodeHtml(error instanceof Error ? error.message : '')}</p>`);
+    } finally {
+      setIsAuditLoading(false);
+    }
+  }, [auditResult, isGroupedView, props.sharePointPermissionAuditService]);
 
   const onLoadDeferredGroupMembers = React.useCallback((loadMoreItem: IPermissionAuditItem): void => {
     if (!auditResult) {
